@@ -32,7 +32,7 @@ if resp.status_code == 200:
         "token_uri": "https://oauth2.googleapis.com/token",
         "client_id": flow_data["client_id"],
         "client_secret": flow_data["client_secret"],
-        "scopes": ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.compose"]
+        "scopes": ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.compose", "https://www.googleapis.com/auth/contacts.readonly"]
     }
     Path("token.json").write_text(json.dumps(token_data, indent=2))
     print("\nGMAIL AUTENTICADO COM SUCESSO!")

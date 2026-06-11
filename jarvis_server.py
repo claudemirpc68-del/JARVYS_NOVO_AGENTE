@@ -40,6 +40,7 @@ app = FastAPI(title="JARVIS 2.0 - Email Automation")
 class EmailService:
     def __init__(self):
         self.gmail_service = None
+        self.creds = None
         self.try_load_token()
     
     def try_load_token(self):
@@ -59,6 +60,7 @@ class EmailService:
                 with open(config.google.token_path, 'w') as token:
                     token.write(creds.to_json())
             
+            self.creds = creds
             self.gmail_service = build('gmail', 'v1', credentials=creds)
             logger.info("Gmail autenticado com token existente")
             
@@ -80,6 +82,7 @@ class EmailService:
             with open(config.google.token_path, 'w') as token:
                 token.write(creds.to_json())
             
+            self.creds = creds
             self.gmail_service = build('gmail', 'v1', credentials=creds)
             logger.info("Gmail autenticado com sucesso")
             return True
@@ -87,6 +90,50 @@ class EmailService:
         except Exception as e:
             logger.error(f"Erro na autenticação Gmail: {e}")
             return False
+
+class ContactsService:
+    def __init__(self, email_service: EmailService):
+        self.email_service = email_service
+        self._people_service = None
+
+    @property
+    def people_service(self):
+        if self._people_service:
+            return self._people_service
+        if self.email_service.creds:
+            try:
+                self._people_service = build('people', 'v1', credentials=self.email_service.creds)
+                logger.info("Serviço Google People (Contatos) inicializado")
+            except Exception as e:
+                logger.error(f"Erro ao inicializar People API: {e}")
+        return self._people_service
+
+    def search_contacts(self, query: str) -> list:
+        """Busca contatos por nome na agenda"""
+        if not self.people_service:
+            logger.warning("Serviço Google Contacts não disponível")
+            return []
+        try:
+            results = self.people_service.people().searchContacts(
+                query=query,
+                readMask="names,emailAddresses"
+            ).execute()
+            
+            contacts = []
+            for result in results.get('results', []):
+                person = result.get('person', {})
+                names = person.get('names', [])
+                emails = person.get('emailAddresses', [])
+                
+                name = names[0].get('displayName', 'Sem Nome') if names else 'Sem Nome'
+                email = emails[0].get('value', '') if emails else ''
+                
+                if email:
+                    contacts.append({"name": name, "email": email})
+            return contacts
+        except Exception as e:
+            logger.error(f"Erro ao buscar contatos para '{query}': {e}")
+            return []
 
 class AIService:
     def __init__(self):
@@ -141,20 +188,22 @@ class AIService:
     def _get_system_prompt(self) -> str:
         """Define o prompt do sistema para email management"""
         return f"""# Visão Geral
-Você é o JARVIS 2.0, o assistente pessoal de gerenciamento de e-mails do usuário.
+Você é o JARVIS 2.0, o assistente pessoal de gerenciamento de e-mails e contatos do usuário.
 O nome do usuário é Claudemir Pedroso Cubas, e o e-mail padrão dele é claudemirpc68@gmail.com.
 Todos os e-mails devem ser formatados profissionalmente em HTML. IMPORTANTE: Não adicione NENHUMA assinatura ao final do e-mail (como "Atenciosamente..."), pois o sistema já anexa a assinatura oficial de Claudemir Pedroso Cubas automaticamente.
 
 **Ferramentas e Parâmetros Exigidos**  
-- **"sendEmail"**: Envia um e-mail. Exige: `emailAddress` (destinatário), `subject` (assunto), `emailBody` (corpo).
+- **"sendEmail"**: Envia um e-mail. Exige: `emailAddress` (destinatário, que pode ser um e-mail ou apenas o nome do contato se estiver cadastrado na agenda), `subject` (assunto), `emailBody` (corpo).
 - **"createDraft"**: Cria um rascunho. Exige: `emailAddress`, `subject`, `emailBody`.
 - **"getEmails"**: Busca e-mails. Parâmetros opcionais: `sender` (remetente), `limit` (limite numérico).
 - **"replyEmail"**: Responde um e-mail. Exige: `messageId`, `emailBody`. Opcional: `subject`.
-- **"chat"**: Usa essa ação apenas para responder saudações (ex: "oi", "olá"), responder a dúvidas gerais do usuário sobre o sistema, suas credenciais (como seu e-mail ou nome) ou bate-papo geral, sem enviar e-mail.
+- **"searchContact"**: Busca um contato na agenda do Google Contatos. Exige: `contactName` (nome ou termo de busca do contato).
+- **"chat"**: Usa essa ação apenas para responder saudações (ex: "oi", "olá"), responder a dúvidas gerais do usuário sobre o sistema, suas credenciais (como seu e-mail ou nome) ou bate-papo geral, sem enviar e-mail nem buscar contatos.
 
 ## Regras de Resposta
 - SEMPRE responda única e exclusivamente em formato JSON válido. Não adicione texto fora do JSON.
 - Sempre inicie a sua mensagem no campo `"response"` com uma saudação amigável personalizada para o Claudemir (ex: "Olá, Claudemir!", "Oi, Claudemir, tudo bem?").
+- Se o usuário pedir para buscar um contato, saber o e-mail de alguém ou listar contatos, use a ação "searchContact".
 
 Responda em JSON EXATAMENTE com esta estrutura, respeitando os nomes em inglês das chaves de parâmetros (deixe os parâmetros vazios se a ação for 'chat'):
 {{
@@ -166,6 +215,7 @@ Responda em JSON EXATAMENTE com esta estrutura, respeitando os nomes em inglês 
 class JarvisService:
     def __init__(self):
         self.email_service = EmailService()
+        self.contacts_service = ContactsService(self.email_service)
         self.ai_service = AIService()
     
     async def execute_command(self, query: str, user_id: str) -> Dict[str, Any]:
@@ -183,11 +233,23 @@ class JarvisService:
             
             if action == "sendEmail":
                 result = self._send_email(ai_response.get("parameters", {}))
-                response = f"Email enviado com sucesso! {result}" if result else "Falha ao enviar email."
+                if isinstance(result, dict):
+                    if result.get("success"):
+                        response = result["message"]
+                    else:
+                        response = result.get("message", f"Falha ao enviar email. Erro: {result.get('error')}")
+                else:
+                    response = f"Email enviado com sucesso! {result}" if result else "Falha ao enviar email."
             
             elif action == "createDraft":
                 result = self._create_draft(ai_response.get("parameters", {}))
-                response = f"Rascunho criado com sucesso! {result}" if result else "Falha ao criar rascunho."
+                if isinstance(result, dict):
+                    if result.get("success"):
+                        response = result["message"]
+                    else:
+                        response = result.get("message", f"Falha ao criar rascunho. Erro: {result.get('error')}")
+                else:
+                    response = f"Rascunho criado com sucesso! {result}" if result else "Falha ao criar rascunho."
             
             elif action == "getEmails":
                 emails = self._get_emails(ai_response.get("parameters", {}))
@@ -203,6 +265,17 @@ class JarvisService:
                 if not result:
                     response += "\n\n❌ Ops, houve uma falha ao tentar enviar/responder o e-mail."
             
+            elif action == "searchContact":
+                contact_name = ai_response.get("parameters", {}).get("contactName", "")
+                contacts = self.contacts_service.search_contacts(contact_name)
+                if contacts:
+                    options = []
+                    for c in contacts:
+                        options.append(f"• **{c['name']}**: {c['email']}")
+                    response = f"Olá, Claudemir! Encontrei os seguintes contatos para '{contact_name}':\n\n" + "\n".join(options)
+                else:
+                    response = f"Olá, Claudemir! Não encontrei nenhum contato com o nome '{contact_name}' no seu Google Contatos."
+            
             elif action == "chat":
                 # O campo response já terá a saudação amigável
                 pass
@@ -216,13 +289,61 @@ class JarvisService:
             logger.error(f"Erro ao executar comando: {e}")
             return {"success": False, "error": str(e)}
     
-    def _send_email(self, params: Dict) -> Optional[str]:
+    def _resolve_email_address(self, email_or_name: str) -> Dict[str, Any]:
+        """
+        Verifica se o destinatário é um e-mail. Se não for, busca no Google Contatos.
+        """
+        email_or_name = email_or_name.strip()
+        if "@" in email_or_name:
+            return {"email": email_or_name, "status": "direct"}
+        
+        logger.info(f"Resolvendo nome '{email_or_name}' via Google Contatos...")
+        contacts = self.contacts_service.search_contacts(email_or_name)
+        
+        if not contacts:
+            return {
+                "email": None,
+                "status": "not_found",
+                "message": f"Não encontrei nenhum contato com o nome '{email_or_name}' na sua agenda do Google Contatos."
+            }
+        
+        if len(contacts) == 1:
+            resolved_email = contacts[0]["email"]
+            resolved_name = contacts[0]["name"]
+            logger.info(f"Contato resolvido: {resolved_name} <{resolved_email}>")
+            return {
+                "email": resolved_email,
+                "status": "resolved",
+                "name": resolved_name
+            }
+        
+        # Múltiplos contatos encontrados
+        options = []
+        for c in contacts:
+            options.append(f"• **{c['name']}** ({c['email']})")
+        options_text = "\n".join(options)
+        
+        return {
+            "email": None,
+            "status": "ambiguous",
+            "message": f"Olá, Claudemir! Encontrei mais de um contato para '{email_or_name}':\n\n{options_text}\n\nPor favor, repita o comando especificando o e-mail ou o nome completo."
+        }
+
+    def _send_email(self, params: Dict) -> Dict[str, Any]:
         """Enviar email via Gmail"""
         if not self.email_service.gmail_service:
-            return "Gmail não configurado. Configure credentials.json para usar email."
+            return {"success": False, "error": "Gmail não configurado. Configure credentials.json para usar email."}
         try:
+            dest = params.get("emailAddress", "")
+            resolution = self._resolve_email_address(dest)
+            
+            if resolution["status"] in ["not_found", "ambiguous"]:
+                return {"success": False, "message": resolution["message"]}
+            
+            to_email = resolution["email"]
+            
             message = self._create_message(
-                to=params.get("emailAddress", ""),
+                to=to_email,
                 subject=params.get("subject", ""),
                 body=params.get("emailBody", "")
             )
@@ -231,19 +352,32 @@ class JarvisService:
                           .send(userId="me", body=message)
                           .execute())
             
-            return f"ID: {send_message['id']}"
+            msg_id = send_message['id']
+            confirm_msg = f"Email enviado com sucesso para **{to_email}**!"
+            if resolution["status"] == "resolved":
+                confirm_msg = f"Email enviado com sucesso para **{resolution['name']}** ({to_email})!"
+                
+            return {"success": True, "message": confirm_msg, "id": msg_id}
             
         except Exception as e:
             logger.error(f"Erro ao enviar email: {e}")
-            return None
+            return {"success": False, "error": str(e)}
     
-    def _create_draft(self, params: Dict) -> Optional[str]:
+    def _create_draft(self, params: Dict) -> Dict[str, Any]:
         """Criar rascunho de email"""
         if not self.email_service.gmail_service:
-            return "Gmail não configurado. Configure credentials.json para usar email."
+            return {"success": False, "error": "Gmail não configurado. Configure credentials.json para usar email."}
         try:
+            dest = params.get("emailAddress", "")
+            resolution = self._resolve_email_address(dest)
+            
+            if resolution["status"] in ["not_found", "ambiguous"]:
+                return {"success": False, "message": resolution["message"]}
+            
+            to_email = resolution["email"]
+            
             message = self._create_message(
-                to=params.get("emailAddress", ""),
+                to=to_email,
                 subject=params.get("subject", ""),
                 body=params.get("emailBody", ""),
                 draft=True
@@ -253,11 +387,16 @@ class JarvisService:
                     .create(userId="me", body=message)
                     .execute())
             
-            return f"ID do rascunho: {draft['id']}"
+            draft_id = draft['id']
+            confirm_msg = f"Rascunho criado com sucesso para **{to_email}**!"
+            if resolution["status"] == "resolved":
+                confirm_msg = f"Rascunho criado com sucesso para **{resolution['name']}** ({to_email})!"
+                
+            return {"success": True, "message": confirm_msg, "id": draft_id}
             
         except Exception as e:
             logger.error(f"Erro ao criar rascunho: {e}")
-            return None
+            return {"success": False, "error": str(e)}
     
     def _get_emails(self, params: Dict) -> list:
         """Buscar emails"""
@@ -457,6 +596,7 @@ async def _handle_gmail_oauth(code: str):
             token.write(creds.to_json())
         
         # Ativar serviço
+        jarvis_service.email_service.creds = creds
         jarvis_service.email_service.gmail_service = build('gmail', 'v1', credentials=creds)
         
         return {"status": "✅ Sucesso!", "message": "Gmail autenticado com sucesso! O JARVIS já pode gerenciar seus emails."}

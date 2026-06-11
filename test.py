@@ -71,6 +71,23 @@ async def test_gmail_api():
         print(f"❌ Erro Gmail API: {e}")
         return False
 
+async def test_contacts_api():
+    """Testar conexão com People API (Google Contatos)"""
+    try:
+        from jarvis_server import EmailService, ContactsService
+        
+        email_service = EmailService()
+        contacts_service = ContactsService(email_service)
+        if contacts_service.people_service:
+            print("✅ Google Contacts API OK")
+            return True
+        else:
+            print("❌ Google Contacts API falhou (serviço não inicializado)")
+            return False
+    except Exception as e:
+        print(f"❌ Erro Google Contacts API: {e}")
+        return False
+
 async def test_ai_service():
     """Testar serviço de IA"""
     try:
@@ -117,6 +134,7 @@ async def run_tests():
         ("Groq API", test_groq_api),
         ("Telegram API", test_telegram_api),
         ("Gmail API", test_gmail_api),
+        ("Google Contacts API", test_contacts_api),
         ("Serviço de IA", test_ai_service),
         ("Comando de Email", test_email_command),
     ]

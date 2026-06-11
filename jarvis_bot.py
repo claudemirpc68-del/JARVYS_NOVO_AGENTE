@@ -39,14 +39,17 @@ import base64
 
 GOOGLE_CREDS = Path(__file__).parent / "credentials.json"
 GOOGLE_TOKEN = Path(__file__).parent / "token.json"
-SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/gmail.compose']
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/contacts.readonly'
+]
 
 gmail_service = None
+people_service = None
 
-def get_gmail():
-    global gmail_service
-    if gmail_service:
-        return gmail_service
+def get_creds():
     if not GOOGLE_TOKEN.exists():
         return None
     try:
@@ -54,16 +57,80 @@ def get_gmail():
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             GOOGLE_TOKEN.write_text(creds.to_json())
+        return creds
+    except:
+        return None
+
+def get_gmail():
+    global gmail_service
+    if gmail_service:
+        return gmail_service
+    creds = get_creds()
+    if not creds:
+        return None
+    try:
         gmail_service = build('gmail', 'v1', credentials=creds)
         return gmail_service
     except:
         return None
 
+def get_people():
+    global people_service
+    if people_service:
+        return people_service
+    creds = get_creds()
+    if not creds:
+        return None
+    try:
+        people_service = build('people', 'v1', credentials=creds)
+        return people_service
+    except:
+        return None
+
+def search_contacts(query):
+    svc = get_people()
+    if not svc:
+        return [], "Google Contacts nao autenticado."
+    try:
+        results = svc.people().searchContacts(query=query, readMask="names,emailAddresses").execute()
+        contacts = []
+        for result in results.get('results', []):
+            person = result.get('person', {})
+            names = person.get('names', [])
+            emails = person.get('emailAddresses', [])
+            name = names[0].get('displayName', 'Sem Nome') if names else 'Sem Nome'
+            email = emails[0].get('value', '') if emails else ''
+            if email:
+                contacts.append({"name": name, "email": email})
+        return contacts, None
+    except Exception as e:
+        return [], str(e)
+
+def resolve_email_address(email_or_name):
+    email_or_name = email_or_name.strip()
+    if "@" in email_or_name:
+        return email_or_name, None, None
+    contacts, err = search_contacts(email_or_name)
+    if err:
+        return None, None, f"Erro ao buscar contatos: {err}"
+    if not contacts:
+        return None, None, f"Nao encontrei nenhum contato com o nome '{email_or_name}' no seu Google Contatos."
+    if len(contacts) == 1:
+        return contacts[0]["email"], contacts[0]["name"], None
+    
+    options = [f"- {c['name']} ({c['email']})" for c in contacts]
+    return None, None, f"Encontrei mais de um contato para '{email_or_name}':\n\n" + "\n".join(options) + "\n\nPor favor especifique o email ou nome completo."
+
 def send_email(to, subject, body):
     svc = get_gmail()
     if not svc:
         return None, "Gmail nao autenticado. Envie /auth para autenticar."
-    msg = f"From: me\nTo: {to}\nSubject: {subject}\nContent-Type: text/html; charset=UTF-8\n\n{body}"
+    
+    resolved_to, name, err = resolve_email_address(to)
+    if err:
+        return None, err
+        
+    msg = f"From: me\nTo: {resolved_to}\nSubject: {subject}\nContent-Type: text/html; charset=UTF-8\n\n{body}"
     raw = base64.urlsafe_b64encode(msg.encode()).decode()
     result = svc.users().messages().send(userId="me", body={"raw": raw}).execute()
     return result['id'], None
@@ -93,6 +160,9 @@ Se tem TODOS os dados para enviar:
 
 Se quer VER emails:
 {{"action":"list","limit":5,"response":"Buscando seus emails, Claudemir..."}}
+
+Se quer BUSCAR ou saber o email de alguém na agenda do Google Contatos:
+{{"action":"contacts","query":"nome_do_contato","response":"Buscando contato..."}}
 
 Se quer AUTENTICAR Gmail:
 {{"action":"auth","response":"Acesse para autenticar seu Gmail: {get_auth_url()}"}}
@@ -208,6 +278,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Nenhum email encontrado.")
         else:
             await update.message.reply_text("Seus emails:\n\n" + "\n---\n".join(emails)[:4000])
+    elif action == "contacts":
+        search_query = result.get("query", "")
+        contacts, err = search_contacts(search_query)
+        if err:
+            await update.message.reply_text(f"Erro ao buscar contatos: {err}")
+        elif not contacts:
+            await update.message.reply_text(f"Nenhum contato encontrado para '{search_query}'.")
+        else:
+            options = [f"• **{c['name']}**: {c['email']}" for c in contacts]
+            await update.message.reply_text(f"Olá, Claudemir! Encontrei os seguintes contatos para '{search_query}':\n\n" + "\n".join(options))
     elif action == "auth":
         await update.message.reply_text(result.get("response", ""))
     else:
