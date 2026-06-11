@@ -17,7 +17,7 @@ data = {
     "code": code,
     "client_id": flow_data["client_id"],
     "client_secret": flow_data["client_secret"],
-    "redirect_uri": "http://localhost:8000/",
+    "redirect_uri": "http://localhost:8000",
     "grant_type": "authorization_code"
 }
 
