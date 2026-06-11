@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 import httpx
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -534,7 +534,7 @@ async def get_gmail_auth_url():
         }
         flow_file.write_text(json.dumps(flow_state))
         
-        return {"auth_url": auth_url}
+        return RedirectResponse(url=auth_url)
         
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
