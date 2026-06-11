@@ -1,0 +1,21 @@
+# Ambientes Virtuais
+.venv/
+venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Chaves e Credenciais
+.env
+token.json
+credentials.json
+gmail_state.txt
+gmail_flow.json
+flow_state.json
+
+# Banco de dados e logs
+*.sqlite3
+*.db
+*.log

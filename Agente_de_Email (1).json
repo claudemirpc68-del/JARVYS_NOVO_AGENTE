@@ -1,0 +1,407 @@
+{
+  "name": "Agente de Email",
+  "nodes": [
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "id": "443888e6-fb98-4647-89c0-72d3790e4d74",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        600
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "vkPfQi7DhSJgvfFu",
+          "name": "OpenAi account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1420,
+        380
+      ],
+      "id": "ac75bfc6-0236-44d4-bce2-996e7fd478f3",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39c2f302-03be-4464-a17a-d7cc481d6d44",
+              "name": "=response",
+              "value": "={{$json.output}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9575b3ac-b460-4b0f-8537-126fce83eff3",
+      "name": "Sucesso",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7ab380a2-a8d3-421c-ab4e-748ea8fb7904",
+              "name": "response",
+              "value": "Unable to perform task. Please try again.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "45e19dc8-7597-472f-a80c-b817932cbea7",
+      "name": "Erro",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $fromAI(\"emailAddress\") }}",
+        "subject": "={{ $fromAI(\"subject\") }}",
+        "message": "={{ $fromAI(\"emailBody\") }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -1100,
+        720
+      ],
+      "id": "39f8c635-f001-4373-9eca-9f3543fb0b64",
+      "name": "enviarEmail",
+      "webhookId": "86c8c4b1-13bb-4ebe-acb9-30e1d7082d55",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.query }}\n",
+        "options": {
+          "systemMessage": "=# Visão Geral\nVocê é um assistente de gerenciamento de e-mails. Todos os e-mails devem ser formatados profissionalmente em HTML e assinados como \"Salu Sparo\".\n\n**Ferramentas de Gerenciamento de E-mail**  \n- Use **\"enviarEmail\"** para enviar e-mails.  \n- Use **\"criarEsboco\"** se o usuário pedir um rascunho.  \n- Use **\"buscarEmails\"** para recuperar e-mails quando solicitado.  \n- Use **\"buscarEtiquetas\"** para recuperar etiquetas.  \n- Use **\"marcarComoNaoVisualizado\"** para marcar um e-mail como não lido. Você deve usar primeiro o \"Get Emails\" para obter o ID da mensagem a ser sinalizada.  \n- Use **\"adicionarEtiqueta\"** para marcar um e-mail com uma etiqueta. Você deve usar primeiro o \"buscarEmails\" para obter o ID da mensagem a ser sinalizada. Depois, deve usar \"buscarEtiquetas\" para obter o ID da etiqueta.  \n- Use **\"responderEmail\"** para responder a um e-mail. Você deve usar primeiro o \"buscarEmails\" para obter o ID da mensagem a ser respondida.\n\n## Observações Finais\n- Aqui está a data/hora atual: {{ $now }}\n"
+        }
+      },
+      "id": "4a655fce-7201-49c0-8815-7f7fbeb90981",
+      "name": "emailAgent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        -868,
+        380
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $fromAI(\"ID\",\"the message ID\") }}",
+        "message": "={{ $fromAI(\"emailBody\") }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -960,
+        720
+      ],
+      "id": "b57e4529-d172-4f24-a716-a34fcdad0a7b",
+      "name": "responderEmail",
+      "webhookId": "114785e6-a859-432b-81b4-c490c1c35b1c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $fromAI(\"ID\",\"the ID of the message\") }}",
+        "labelIds": "={{ $fromAI(\"labelID\") }}"
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -820,
+        720
+      ],
+      "id": "e0034045-f5bc-4d1a-be94-af6a73c9364b",
+      "name": "adicionarEtiqueta",
+      "webhookId": "0e951529-2e6d-40bf-ac40-fc0947e242e2",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": "={{ $fromAI(\"limit\",\"how many emails the user wants\") }}",
+        "simple": false,
+        "filters": {
+          "sender": "={{ $fromAI(\"sender\",\"who the emails are from\") }}"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -680,
+        720
+      ],
+      "id": "1abc49ed-08f7-4a2d-9367-5874877ecf43",
+      "name": "buscarEmails",
+      "webhookId": "af4b3298-9037-44b0-aa12-2acbfbb5e66f",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "label",
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -540,
+        720
+      ],
+      "id": "523e286f-c018-4d0a-9555-bc296b417025",
+      "name": "buscarEtiquetas",
+      "webhookId": "9e08b59e-792d-4566-83f1-9263c9ad86ae",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "markAsUnread",
+        "messageId": "={{ $fromAI(\"messageID\") }}"
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -400,
+        720
+      ],
+      "id": "027f556a-7cd1-4167-9f85-78464ac322e5",
+      "name": "marcarComoNaoVisualizado",
+      "webhookId": "a35af9d8-f67d-4ff9-803f-59ec6356e795",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $fromAI(\"subject\") }}",
+        "emailType": "html",
+        "message": "={{ $fromAI(\"emailBody\") }}",
+        "options": {
+          "sendTo": "={{ $fromAI(\"emailAddress\") }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        -260,
+        720
+      ],
+      "id": "b9a8d8b5-2825-4464-a53d-fad5870adc9c",
+      "name": "criarEsboco",
+      "webhookId": "17016bce-d7d7-428a-a56c-f6ea122db8be",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PNogoB2rASXs5W5i",
+          "name": "Gmail account 3"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "query": "adicione a etiqueta reunião no meu último email enviado"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviarEmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "emailAgent": {
+      "main": [
+        [
+          {
+            "node": "Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "responderEmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "adicionarEtiqueta": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscarEmails": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscarEtiquetas": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "marcarComoNaoVisualizado": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criarEsboco": {
+      "ai_tool": [
+        [
+          {
+            "node": "emailAgent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4ab06564-0998-4a13-80ca-ddc7946084b7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e11be1b45f2a1b1a0def716906a93b0d3a3c3358243501a3c244550ec191e47e"
+  },
+  "id": "N53bnOcA26VE4nCO",
+  "tags": []
+}
