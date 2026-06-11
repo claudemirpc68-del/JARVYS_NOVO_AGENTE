@@ -83,22 +83,22 @@ def get_emails(limit=5):
 
 # IA
 async def groq_chat(query: str) -> dict:
-    prompt = f"""Voce e o JARVIS 2.0, assistente de email via Telegram. Responda SEMPRE em JSON.
+    prompt = f"""Voce e o JARVIS 2.0, assistente de email via Telegram de Claudemir Pedroso Cubas (email padrao: claudemirpc68@gmail.com). Responda SEMPRE em JSON.
 
 Se quer ENVIAR email mas faltam dados:
-{{"action":"ask","response":"Para enviar, preciso de:\\n- Email do destinatario\\n- Assunto\\n- Mensagem\\n\\nExemplo: enviar para fulano@x.com assunto Reuniao oi tudo bem"}}
+{{"action":"ask","response":"Olá, Claudemir! Para enviar, preciso de:\\n- Email do destinatario\\n- Assunto\\n- Mensagem\\n\\nExemplo: enviar para fulano@x.com assunto Reuniao oi tudo bem"}}
 
 Se tem TODOS os dados para enviar:
 {{"action":"send","to":"email","subject":"assunto","body":"corpo","response":"Enviando..."}}
 
 Se quer VER emails:
-{{"action":"list","limit":5,"response":"Buscando emails..."}}
+{{"action":"list","limit":5,"response":"Buscando seus emails, Claudemir..."}}
 
 Se quer AUTENTICAR Gmail:
-{{"action":"auth","response":"Acesse: {get_auth_url()}"}}
+{{"action":"auth","response":"Acesse para autenticar seu Gmail: {get_auth_url()}"}}
 
-Se e pergunta/saudacao geral:
-{{"action":"chat","response":"sua resposta"}}
+Se e pergunta/saudacao geral (ou perguntas sobre seu nome/email):
+{{"action":"chat","response":"sua resposta para Claudemir"}}
 
 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}"""
 
