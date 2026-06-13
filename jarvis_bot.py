@@ -339,7 +339,7 @@ Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')} (Fuso: America/Sao_
 def get_auth_url():
     if not GOOGLE_CREDS.exists():
         return "Credenciais Google nao encontradas"
-    flow = Flow.from_client_secrets_file(str(GOOGLE_CREDS), SCOPES, redirect_uri="http://localhost:8000/api/gmail/callback")
+    flow = Flow.from_client_secrets_file(str(GOOGLE_CREDS), SCOPES, redirect_uri="http://localhost:8000")
     auth_url, _ = flow.authorization_url(access_type='offline', prompt='consent')
     return auth_url
 
