@@ -244,6 +244,38 @@ def list_events(start_iso=None, end_iso=None, max_results=10):
     except Exception as e:
         return None, str(e)
 
+async def search_web_tavily(query):
+    tavily_key = os.environ.get("TAVILY_API_KEY", "")
+    if not tavily_key:
+        logger.warning("TAVILY_API_KEY nao configurada no .env.")
+        return "Erro: TAVILY_API_KEY nao configurada no .env."
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": tavily_key,
+                    "query": query,
+                    "search_depth": "basic",
+                    "max_results": 3
+                },
+                timeout=15
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                if not results:
+                    return "Nenhum resultado relevante encontrado na pesquisa web."
+                lines = []
+                for idx, r in enumerate(results, 1):
+                    lines.append(f"{idx}. **{r.get('title')}**\nLink: {r.get('url')}\nConteudo: {r.get('content')}")
+                return "\n\n".join(lines)
+            else:
+                return f"Erro na API do Tavily: Status {resp.status_code}"
+    except Exception as e:
+        logger.error(f"Erro ao buscar no Tavily: {e}")
+        return f"Erro na pesquisa web: {e}"
+
 # Memória de conversação por chat_id
 chat_memories = {}
 
@@ -260,7 +292,7 @@ def add_to_history(chat_id, role, content):
         history.pop(0)
 
 # IA
-async def groq_chat(chat_id: int, query: str) -> dict:
+async def groq_chat(chat_id: int, query: str, save_to_history: bool = True) -> dict:
     # Buscar os contatos para injetar no Prompt do sistema
     contacts_list = get_all_contacts()
     contacts_str = "\n".join(contacts_list) if contacts_list else "Nenhum contato encontrado ou Google Contacts nao autenticado."
@@ -301,7 +333,13 @@ AÇÕES DE E-MAIL:
 - Ver e-mails:
 {{"action":"list","limit":5,"response":"Buscando seus emails, Claudemir..."}}
 
+REGRAS DE PESQUISA WEB (INTERNET):
+1. Use a ação "web_search" se o usuário perguntar sobre fatos recentes, notícias do dia, previsão do tempo atualizada, resultados de jogos ou qualquer informação em tempo real que você não tenha em seu conhecimento prévio.
+2. Formule uma query de pesquisa clara e objetiva para o campo "query".
+
 OUTRAS AÇÕES:
+- Pesquisa na Web:
+{{"action":"web_search","query":"termo de busca","response":"Pesquisando na web por termo de busca..."}}
 - Buscar contatos:
 {{"action":"contacts","query":"nome_do_contato","response":"Buscando o e-mail de nome_do_contato nos seus contatos..."}}
 - Autenticar:
@@ -311,11 +349,13 @@ OUTRAS AÇÕES:
 
 Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')} (Fuso: America/Sao_Paulo)"""
 
-    # Adicionar mensagem do usuário ao histórico
-    add_to_history(chat_id, "user", query)
-    
-    # Construir mensagens com o histórico completo
-    messages = [{"role": "system", "content": prompt}] + get_chat_history(chat_id)
+    # Adicionar mensagem do usuário ao histórico apenas se solicitado
+    if save_to_history:
+        add_to_history(chat_id, "user", query)
+        messages = [{"role": "system", "content": prompt}] + get_chat_history(chat_id)
+    else:
+        # Se save_to_history for False, incluímos a query temporariamente apenas no payload enviado à API, sem poluir a memória persistente do chat
+        messages = [{"role": "system", "content": prompt}] + get_chat_history(chat_id) + [{"role": "user", "content": query}]
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -398,6 +438,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Msg from {chat_id}: {text}")
     
     result = await groq_chat(chat_id, text)
+    logger.info(f"Groq Chat result: {result}")
     action = result.get("action", "chat")
     
     response_text = ""
@@ -464,6 +505,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"• **{ev.get('summary')}** — {dt_str}")
             response_text = "📅 Seus compromissos encontrados:\n\n" + "\n".join(lines)
         await update.message.reply_text(response_text)
+    elif action == "web_search":
+        search_query = result.get("query", "")
+        status_msg = await update.message.reply_text(f"🔍 Pesquisando na web por '{search_query}'...")
+        
+        search_results = await search_web_tavily(search_query)
+        
+        temp_context = f"[SISTEMA: Resultados da pesquisa para '{search_query}']\n\n{search_results}"
+        add_to_history(chat_id, "system", temp_context)
+        
+        final_result = await groq_chat(chat_id, f"Responda a pergunta original ('{text}') usando as informações acima.", save_to_history=False)
+        logger.info(f"Web Search final result: {final_result}")
+        
+        history = get_chat_history(chat_id)
+        if history and history[-1]["role"] == "system":
+            history.pop()
+            
+        response_text = final_result.get("response", "Desculpe, nao consegui formular a resposta.")
+        logger.info(f"Sending web_search final response: {response_text[:300]}")
+        try:
+            await status_msg.delete()
+        except Exception as e:
+            logger.warning(f"Erro ao deletar msg de status: {e}")
+            
+        try:
+            await update.message.reply_text(response_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Erro ao enviar resposta com Markdown: {e}. Enviando texto puro.")
+            await update.message.reply_text(response_text)
     elif action == "auth":
         response_text = result.get("response", "")
         await update.message.reply_text(response_text)

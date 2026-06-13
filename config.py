@@ -18,6 +18,7 @@ class APIConfig:
     """Configuração das APIs"""
     groq_api_key: str
     telegram_token: str
+    tavily_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None  # Mantido para compatibilidade
     
 @dataclass
@@ -64,6 +65,7 @@ class Config:
         self.api = APIConfig(
             groq_api_key=self._get_env("GROQ_API_KEY"),
             telegram_token=self._get_env("TELEGRAM_TOKEN"),
+            tavily_api_key=self._get_env("TAVILY_API_KEY", None),
             openai_api_key=self._get_env("OPENAI_API_KEY", None)  # Opcional para compatibilidade
         )
         self.google = GoogleConfig(
