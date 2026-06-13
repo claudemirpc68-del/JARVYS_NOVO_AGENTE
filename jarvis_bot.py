@@ -130,7 +130,12 @@ def send_email(to, subject, body):
     if err:
         return None, err
         
-    msg = f"From: me\nTo: {resolved_to}\nSubject: {subject}\nContent-Type: text/html; charset=UTF-8\n\n{body}"
+    # Adicionar assinatura programática
+    signature = os.environ.get("SIGNATURE", "Claudemir Pedroso Cubas")
+    signature = signature.replace('"', '').replace("'", "").strip()
+    body_with_sig = f"{body}<br><br>---<br><i>{signature}</i>"
+        
+    msg = f"From: me\nTo: {resolved_to}\nSubject: {subject}\nContent-Type: text/html; charset=UTF-8\n\n{body_with_sig}"
     raw = base64.urlsafe_b64encode(msg.encode()).decode()
     result = svc.users().messages().send(userId="me", body={"raw": raw}).execute()
     return result['id'], None
@@ -148,21 +153,42 @@ def get_emails(limit=5):
         emails.append(f"De: {headers.get('From','?')}\nAssunto: {headers.get('Subject','?')}\nData: {headers.get('Date','?')}")
     return emails, None
 
+# Memória de conversação por chat_id
+chat_memories = {}
+
+def get_chat_history(chat_id):
+    if chat_id not in chat_memories:
+        chat_memories[chat_id] = []
+    return chat_memories[chat_id]
+
+def add_to_history(chat_id, role, content):
+    history = get_chat_history(chat_id)
+    history.append({"role": role, "content": content})
+    # Manter as últimas 15 mensagens para não estourar o contexto
+    if len(history) > 15:
+        history.pop(0)
+
 # IA
-async def groq_chat(query: str) -> dict:
+async def groq_chat(chat_id: int, query: str) -> dict:
     prompt = f"""Voce e o JARVIS 2.0, assistente de email via Telegram de Claudemir Pedroso Cubas (email padrao: claudemirpc68@gmail.com). Responda SEMPRE em JSON.
 
-Se quer ENVIAR email mas faltam dados:
-{{"action":"ask","response":"Olá, Claudemir! Para enviar, preciso de:\\n- Email do destinatario\\n- Assunto\\n- Mensagem\\n\\nExemplo: enviar para fulano@x.com assunto Reuniao oi tudo bem"}}
+REGRAS CRÍTICAS PARA ENVIO DE E-MAIL:
+1. Se o usuario pedir para enviar um e-mail para um NOME (ex: "Joao", "Maria", "esposa") in vez de um endereço de e-mail completo (com "@"), você deve OBRIGATORIAMENTE retornar a ação "contacts" primeiro para pesquisar o e-mail correspondente no Google Contatos.
+2. Apenas retorne a ação "send" se você tiver um endereço de e-mail válido (contendo "@") no campo "to".
+3. Se faltarem dados essenciais para o envio (como assunto ou corpo) e você já tiver o e-mail completo, use a ação "ask".
+4. Se o usuário fornecer o assunto/contexto do e-mail mas não detalhar o texto exato do corpo, você deve REDIGIR de forma autônoma um corpo de mensagem completo, profissional, amigável e contextualmente adequado. Nunca deixe a mensagem/corpo de e-mail em branco ou vazio.
 
-Se tem TODOS os dados para enviar:
-{{"action":"send","to":"email","subject":"assunto","body":"corpo","response":"Enviando..."}}
+Se quer ENVIAR email e já possui o e-mail completo (com "@"):
+{{"action":"send","to":"email_com_arroba","subject":"assunto","body":"corpo","response":"Enviando..."}}
+
+Se quer ENVIAR email mas faltam dados e você já possui o e-mail completo (com "@"):
+{{"action":"ask","response":"Olá, Claudemir! Para enviar, preciso de:\\n- Assunto\\n- Mensagem"}}
 
 Se quer VER emails:
 {{"action":"list","limit":5,"response":"Buscando seus emails, Claudemir..."}}
 
-Se quer BUSCAR ou saber o email de alguém na agenda do Google Contatos:
-{{"action":"contacts","query":"nome_do_contato","response":"Buscando contato..."}}
+Se o usuário quer enviar e-mail para um NOME, ou quer apenas buscar/saber o e-mail de alguém na agenda do Google Contatos:
+{{"action":"contacts","query":"nome_do_contato","response":"Buscando o e-mail de nome_do_contato nos seus contatos..."}}
 
 Se quer AUTENTICAR Gmail:
 {{"action":"auth","response":"Acesse para autenticar seu Gmail: {get_auth_url()}"}}
@@ -172,14 +198,17 @@ Se e pergunta/saudacao geral (ou perguntas sobre seu nome/email):
 
 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}"""
 
+    # Adicionar mensagem do usuário ao histórico
+    add_to_history(chat_id, "user", query)
+    
+    # Construir mensagens com o histórico completo
+    messages = [{"role": "system", "content": prompt}] + get_chat_history(chat_id)
+
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": query}
-            ], "temperature": 0.7},
+            json={"model": "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7},
             timeout=30
         )
         if resp.status_code == 200:
@@ -255,43 +284,53 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     text = update.message.text
-    logger.info(f"Msg: {text}")
+    logger.info(f"Msg from {chat_id}: {text}")
     
-    result = await groq_chat(text)
+    result = await groq_chat(chat_id, text)
     action = result.get("action", "chat")
     
+    response_text = ""
     if action == "send":
         to = result.get("to", "")
         subject = result.get("subject", "")
         body = result.get("body", "")
         msg_id, err = send_email(to, subject, body)
         if err:
-            await update.message.reply_text(err)
+            response_text = err
         else:
-            await update.message.reply_text(f"Email enviado para {to}! ID: {msg_id}")
+            response_text = f"Email enviado para {to}! ID: {msg_id}"
+        await update.message.reply_text(response_text)
     elif action == "list":
         emails, err = get_emails(result.get("limit", 5))
         if err:
-            await update.message.reply_text(err)
+            response_text = err
         elif not emails:
-            await update.message.reply_text("Nenhum email encontrado.")
+            response_text = "Nenhum email encontrado."
         else:
-            await update.message.reply_text("Seus emails:\n\n" + "\n---\n".join(emails)[:4000])
+            response_text = "Seus emails:\n\n" + "\n---\n".join(emails)[:4000]
+        await update.message.reply_text(response_text)
     elif action == "contacts":
         search_query = result.get("query", "")
         contacts, err = search_contacts(search_query)
         if err:
-            await update.message.reply_text(f"Erro ao buscar contatos: {err}")
+            response_text = f"Erro ao buscar contatos: {err}"
         elif not contacts:
-            await update.message.reply_text(f"Nenhum contato encontrado para '{search_query}'.")
+            response_text = f"Nenhum contato encontrado para '{search_query}'."
         else:
             options = [f"• **{c['name']}**: {c['email']}" for c in contacts]
-            await update.message.reply_text(f"Olá, Claudemir! Encontrei os seguintes contatos para '{search_query}':\n\n" + "\n".join(options))
+            response_text = f"Olá, Claudemir! Encontrei os seguintes contatos para '{search_query}':\n\n" + "\n".join(options)
+        await update.message.reply_text(response_text)
     elif action == "auth":
-        await update.message.reply_text(result.get("response", ""))
+        response_text = result.get("response", "")
+        await update.message.reply_text(response_text)
     else:
-        await update.message.reply_text(result.get("response", "Desculpe, nao entendi."))
+        response_text = result.get("response", result.get("response", "Desculpe, nao entendi."))
+        await update.message.reply_text(response_text)
+        
+    # Salvar a resposta no histórico da conversação
+    add_to_history(chat_id, "assistant", response_text)
 
 def main():
     if not TELEGRAM_TOKEN:
