@@ -1,0 +1,440 @@
+import os
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+import httpx
+
+from harness.logger import logger
+from harness.memory import JarvisMemory
+from harness.security import JarvisSecurity
+from config import config
+
+# Importar as ferramentas encapsuladas
+import tools.gmail_tool as gmail
+import tools.contacts_tool as contacts
+import tools.calendar_tool as calendar
+import tools.tavily_tool as tavily
+import tools.linkedin_tool as linkedin
+
+class JarvisOrchestrator:
+    def __init__(self):
+        self.memory = JarvisMemory()
+        self.security = JarvisSecurity()
+        self.groq_api_key = config.api.groq_api_key or os.environ.get("GROQ_API_KEY", "")
+        
+        # Caminho absoluto para o system prompt
+        self.prompt_path = Path(__file__).parent.parent / "llm_persona" / "system_prompt.txt"
+        
+        # Carregar o prompt base
+        if self.prompt_path.exists():
+            self.base_prompt = self.prompt_path.read_text(encoding="utf-8")
+            logger.info("Persona (system_prompt.txt) carregada com sucesso no Orquestrador.")
+        else:
+            logger.error(f"Arquivo de persona não encontrado em: {self.prompt_path}")
+            self.base_prompt = "Você é o JARVIS 2.0. Responda em JSON."
+
+    def update_memory(self, chat_id: int, role: str, content: str) -> None:
+        """Interface para gerenciar e persistir o histórico de conversação do chat"""
+        self.memory.add_message(chat_id, role, content)
+
+    async def classify_intent(self, chat_id: int, text: str, save_to_history: bool = True) -> dict:
+        """
+        Classifica a intenção do usuário chamando o Groq API em formato JSON estruturado.
+        Substitui dinamicamente as variáveis de prompt (data/hora, contatos e URL de auth).
+        """
+        # Carregar contatos para injeção de prompt
+        contacts_list = contacts.get_all_contacts()
+        contacts_str = "\n".join(contacts_list) if contacts_list else "Nenhum contato encontrado ou Google Contacts nao autenticado."
+        
+        # Dia da semana e fuso horário
+        weekdays = ["segunda-feira", "terca-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sabado", "domingo"]
+        today_weekday = weekdays[datetime.now().weekday()]
+        datetime_now_str = datetime.now().strftime('%d/%m/%Y %H:%M')
+        
+        # URL de autenticação local do FastAPI
+        auth_url = f"http://localhost:{config.server.port}/api/gmail/auth-url"
+        
+        # Formatar o prompt do sistema dinamicamente
+        system_prompt = self.base_prompt.format(
+            contacts_str=contacts_str,
+            today_weekday=today_weekday,
+            auth_url=auth_url,
+            datetime_now=datetime_now_str
+        )
+        
+        # Se for salvar na memória principal (fluxo padrão)
+        if save_to_history:
+            self.update_memory(chat_id, "user", text)
+            
+        history = self.memory.get_history(chat_id)
+        
+        # Se save_to_history for False (ex: chamada recursiva da busca web),
+        # incluímos a query de instrução temporariamente no payload enviado à API do Groq
+        if save_to_history:
+            messages = [{"role": "system", "content": system_prompt}] + history
+        else:
+            messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": text}]
+            
+        try:
+            logger.info("Chamando a API do Groq para classificação de intenção...")
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.groq_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "response_format": {"type": "json_object"}
+                    },
+                    timeout=30
+                )
+                
+                if resp.status_code == 200:
+                    content = resp.json()["choices"][0]["message"]["content"]
+                    logger.debug(f"Retorno bruto do Groq: {content}")
+                    
+                    # Tentar carregar como JSON diretamente
+                    try:
+                        parsed_json = json.loads(content)
+                    except json.JSONDecodeError as jde:
+                        # Se falhar, tentar extrair bloco markdown de JSON caso esteja envelopado na raiz
+                        logger.warning(f"Falha ao parsear JSON direto, tentando extrair bloco markdown: {jde}")
+                        if "```" in content:
+                            m = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
+                            if m:
+                                try:
+                                    parsed_json = json.loads(m.group(1))
+                                except json.JSONDecodeError:
+                                    raise jde
+                            else:
+                                raise jde
+                        else:
+                            raise jde
+                        
+                    logger.info(f"Intenção classificada: {parsed_json.get('action')}")
+                    return parsed_json
+                else:
+                    logger.error(f"Erro na API do Groq: Status {resp.status_code} - {resp.text}")
+                    return {"action": "chat", "response": f"Erro de comunicação com a IA (Status {resp.status_code})."}
+                    
+        except Exception as e:
+            logger.error(f"Exceção ao chamar Groq: {e}")
+            return {"action": "chat", "response": f"Erro interno de processamento da IA: {e}"}
+
+    def validate_action(self, chat_id: int, action: dict) -> tuple[bool, dict]:
+        """
+        Valida se a ação estruturada gerada pelo Groq atende às regras de segurança do Harness.
+        Verifica confirmações para ações críticas e envios de e-mails sensíveis.
+        """
+        action_type = action.get("action", "chat")
+        
+        # 1. Verificar ações críticas de exclusão no security.py
+        if self.security.requires_confirmation(action_type):
+            history = self.memory.get_history(chat_id)
+            if not self.security.has_user_confirmed(history):
+                logger.warning(f"Ação crítica '{action_type}' bloqueada por falta de confirmação do usuário.")
+                return False, {
+                    "action": "chat",
+                    "response": "Esta é uma ação crítica (exclusão). Você confirma que deseja prosseguir com isso?"
+                }
+
+        # 2. Regra Crítica de Segurança de E-mail (Gmail)
+        if action_type == "send":
+            to_field = action.get("to", "").strip()
+            
+            # Verificar se há e-mail válido com @
+            if "@" not in to_field:
+                # Se não for e-mail completo, tenta resolver pelo Contacts
+                resolved_email, name, err = contacts.resolve_email_address(to_field)
+                if err:
+                    logger.warning(f"Falha de validação de destinatário para '{to_field}': {err}")
+                    return False, {"action": "chat", "response": err}
+                action["to"] = resolved_email
+                logger.info(f"Destinatário resolvido e atualizado de '{to_field}' para '{resolved_email}'")
+            
+            # Verificar se o usuário confirmou explicitamente o envio de e-mail recente
+            history = self.memory.get_history(chat_id)
+            if not self.security.has_user_confirmed(history):
+                logger.warning("Envio de e-mail bloqueado: Usuário ainda não deu aprovação do texto.")
+                subject = action.get("subject", "Sem assunto")
+                body = action.get("body", "Sem corpo de mensagem")
+                return False, {
+                    "action": "chat",
+                    "response": (
+                        f"Olá, Claudemir! Preparei o e-mail abaixo:\\n\\n"
+                        f"**Para:** {action.get('to')}\\n"
+                        f"**Assunto:** {subject}\\n"
+                        f"**Mensagem:**\\n{body}\\n\\n"
+                        f"Você confirma o envio?"
+                    )
+                }
+                
+        return True, action
+
+    def feedback_loop(self, action_type: str, err_msg: str) -> dict:
+        """
+        Interfere de forma autônoma em caso de falha na execução de alguma ferramenta,
+        auditando o erro e formatando um fallback amigável ao usuário.
+        """
+        logger.error(f"Feedback Loop ativado para a ação '{action_type}'. Erro: {err_msg}")
+        return {
+            "action": "chat",
+            "response": f"Desculpe, Claudemir. Encontrei um problema ao tentar executar essa tarefa no meu sistema. (Detalhe: {err_msg})"
+        }
+
+    async def process(self, chat_id: int, user_input: str, on_action_start=None) -> dict:
+        """
+        Ponto de entrada central do Harness.
+        Recebe a mensagem bruta do usuário, aplica moderação, rate limit, resolve a ação e executa a ferramenta.
+        """
+        # 1. Sanitizar entrada
+        cleaned_input = self.security.sanitize_input(user_input)
+        
+        # 2. Verificar Rate Limiting
+        allowed, wait_time = self.security.check_rate_limit(chat_id)
+        if not allowed:
+            return {
+                "action": "chat",
+                "response": f"⚠️ Você está enviando mensagens rápido demais. Por favor, aguarde {wait_time} segundos."
+            }
+            
+        # 3. Moderar conteúdo
+        if not self.security.moderate_content(cleaned_input):
+            return {
+                "action": "chat",
+                "response": "⚠️ Não posso processar mensagens contendo esse tipo de conteúdo ou instruções perigosas."
+            }
+
+        # 4. Classificar Intenção via Groq (Salva no histórico de conversação)
+        result = await self.classify_intent(chat_id, cleaned_input, save_to_history=True)
+        
+        # 5. Validar Ação
+        is_safe, validated_action = self.validate_action(chat_id, result)
+        if not is_safe:
+            # Retorna a mensagem de aviso/confirmação gerada pela validação
+            return validated_action
+            
+        action_type = validated_action.get("action", "chat")
+        
+        # Invocar callback de ação se fornecido para feedback visual (UX)
+        if on_action_start:
+            try:
+                await on_action_start(action_type, validated_action)
+            except Exception as e:
+                logger.warning(f"Erro ao executar callback on_action_start: {e}")
+        
+        # 6. Execução das Ferramentas
+        try:
+            if action_type == "send":
+                to = validated_action.get("to", "")
+                subject = validated_action.get("subject", "")
+                body = validated_action.get("body", "")
+                
+                # Anexar assinatura do config (Claudemir Pedroso Cubas)
+                signature = os.environ.get("SIGNATURE", "Claudemir Pedroso Cubas")
+                body_with_sig = f"{body}<br><br>---<br><i>{signature}</i>"
+                
+                msg_id, err = gmail.send_email(to, subject, body_with_sig)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                return {
+                    "action": "chat",
+                    "response": f"✅ E-mail enviado com sucesso para {to}! (ID: {msg_id})"
+                }
+                
+            elif action_type == "list":
+                limit = validated_action.get("limit", 5)
+                emails, err = gmail.get_emails(limit)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                if not emails:
+                    return {"action": "chat", "response": "Nenhum e-mail encontrado na sua caixa de entrada."}
+                return {
+                    "action": "chat",
+                    "response": "📧 **Seus últimos e-mails:**\n\n" + "\n---\n".join(emails)[:4000]
+                }
+                
+            elif action_type == "contacts":
+                query = validated_action.get("query", "")
+                results, err = contacts.search_contacts(query)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                if not results:
+                    return {"action": "chat", "response": f"Nenhum contato encontrado correspondente a '{query}'."}
+                lines = [f"• **{c['name']}**: {c['email']}" for c in results]
+                return {
+                    "action": "chat",
+                    "response": f"👤 **Contatos encontrados para '{query}':**\n\n" + "\n".join(lines)
+                }
+                
+            elif action_type == "calendar_create":
+                title = validated_action.get("title", "")
+                start = validated_action.get("start", "")
+                end = validated_action.get("end", "")
+                desc = validated_action.get("description", "")
+                atts = validated_action.get("attendees", [])
+                
+                event, err = calendar.create_event(title, start, end, desc, atts)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                return {
+                    "action": "chat",
+                    "response": f"📅 **Evento criado com sucesso!**\n\n**Título:** {event.get('summary')}\n**Link:** {event.get('htmlLink')}"
+                }
+                
+            elif action_type == "calendar_list":
+                start = validated_action.get("start", "")
+                end = validated_action.get("end", "")
+                events, err = calendar.list_events(start, end)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                if not events:
+                    return {"action": "chat", "response": "Nenhum compromisso agendado para o período solicitado."}
+                
+                lines = []
+                for ev in events:
+                    start_time = ev.get('start', {}).get('dateTime') or ev.get('start', {}).get('date')
+                    try:
+                        dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                        dt_str = dt.strftime('%d/%m às %H:%M')
+                    except:
+                        dt_str = start_time
+                    lines.append(f"• **{ev.get('summary')}** — {dt_str}")
+                return {
+                    "action": "chat",
+                    "response": "📅 **Seus compromissos:**\n\n" + "\n".join(lines)
+                }
+                
+            elif action_type in ["linkedin_post", "linkedin_article"]:
+                topic = validated_action.get("topic", "")
+                style = "post" if action_type == "linkedin_post" else "article"
+                
+                logger.info(f"Harness LinkedIn: Gerando conteúdo do tipo '{style}' para o tema '{topic}'")
+                
+                # 1. Verificar duplicidade de temas
+                is_dup, alert_msg = linkedin.is_topic_duplicate(topic)
+                
+                # 2. Selecionar o template de prompt
+                if style == "post":
+                    prompt = linkedin.VIRAL_POST_TEMPLATE.format(topic=topic)
+                else:
+                    prompt = linkedin.TECHNICAL_ARTICLE_TEMPLATE.format(topic=topic)
+                    
+                if is_dup:
+                    prompt += "\n\nNOTA DE EVITAR DUPLICIDADE: Você já gerou um post/artigo sobre este tema. Crie um conteúdo sob uma perspectiva completamente diferente para não ser repetitivo!"
+                
+                # 3. Chamar a LLM (Groq) sem salvar esta instrução de escrita no histórico de conversação
+                final_result = await self.classify_intent(chat_id, prompt, save_to_history=False)
+                generated_content = ""
+                
+                if isinstance(final_result, dict):
+                    # 1. Procurar na chave padrão "response" ou chaves de texto direto comuns
+                    for k in ["response", "post", "post_content", "content", "text", "article", "article_content"]:
+                        if k in final_result and final_result[k]:
+                            generated_content = final_result[k]
+                            break
+                            
+                    # 2. Se não achou texto direto, mas o JSON está quebrado nas seções típicas de artigo
+                    if not generated_content and ("title" in final_result or "introduction" in final_result):
+                        markdown_parts = []
+                        if "title" in final_result:
+                            markdown_parts.append(f"# {final_result['title']}")
+                        if "introduction" in final_result:
+                            markdown_parts.append(f"## Introdução\n{final_result['introduction']}")
+                        if "development" in final_result:
+                            dev = final_result["development"]
+                            if isinstance(dev, list):
+                                for section in dev:
+                                    if isinstance(section, dict):
+                                        sec_title = section.get("title", "")
+                                        sec_content = section.get("content", "")
+                                        if sec_title:
+                                            if sec_title.startswith("#"):
+                                                markdown_parts.append(f"{sec_title}\n{sec_content}")
+                                            else:
+                                                markdown_parts.append(f"### {sec_title}\n{sec_content}")
+                                    else:
+                                        markdown_parts.append(str(section))
+                            else:
+                                markdown_parts.append(f"## Desenvolvimento\n{dev}")
+                        if "conclusion" in final_result:
+                            conclusion = final_result["conclusion"]
+                            if isinstance(conclusion, dict):
+                                markdown_parts.append(f"## Conclusão\n{conclusion.get('content', '') or conclusion.get('response', '')}")
+                            else:
+                                markdown_parts.append(f"## Conclusão\n{conclusion}")
+                        
+                        generated_content = "\n\n".join(markdown_parts)
+                        
+                    # 3. Fallback final: representação de string se nada acima funcionar
+                    if not generated_content:
+                        generated_content = str(final_result)
+                else:
+                    generated_content = str(final_result)
+                
+                # 4. Validar tamanho dos caracteres do LinkedIn
+                is_valid, size, limit = linkedin.validate_content(generated_content, style)
+                if not is_valid:
+                    logger.warning(f"Conteúdo do LinkedIn gerado ({size} chars) excede o limite ({limit} chars). Solicitando re-escrita curta...")
+                    # Feedback loop autônomo para encurtar o texto
+                    shorten_instruction = f"Seu texto anterior excedeu o limite de caracteres do LinkedIn (tamanho atual: {size}, limite: {limit}). Por favor, reescreva-o de forma mais objetiva e concisa, sem perder a qualidade, garantindo que fique com menos de {limit} caracteres."
+                    self.update_memory(chat_id, "system", f"[SISTEMA: Rascunho anterior de tamanho inválido]\n\n{generated_content}")
+                    
+                    final_result = await self.classify_intent(chat_id, shorten_instruction, save_to_history=False)
+                    generated_content = final_result.get("response", generated_content)
+                    
+                    # Remover rascunho inválido da memória
+                    history = self.memory.get_history(chat_id)
+                    if history and history[-1]["role"] == "system":
+                        history.pop()
+                
+                # 5. Salvar o tópico no histórico persistente do LinkedIn
+                linkedin.save_topic(topic)
+                
+                # Se for duplicado, adicionar um aviso discreto ao usuário
+                response_text = generated_content
+                if is_dup and alert_msg:
+                    response_text = f"{alert_msg}\n\n{generated_content}"
+                    
+                return {
+                    "action": "chat",
+                    "response": response_text
+                }
+                
+            elif action_type == "web_search":
+                # LÓGICA REACT (Agentic Loop de busca web)
+                search_query = validated_action.get("query", "")
+                logger.info(f"Harness ReAct: Iniciando busca no Tavily para '{search_query}'")
+                
+                # Executar busca web
+                search_results = tavily.search_web_tavily(search_query)
+                
+                # Inserir os resultados temporariamente na memória como mensagem do sistema
+                temp_context = f"[SISTEMA: Resultados da pesquisa na internet para '{search_query}']\n\n{search_results}"
+                self.update_memory(chat_id, "system", temp_context)
+                
+                # Chamar novamente o Groq (IA) com save_to_history=False para obter o resumo/resposta final
+                instruction = f"Por favor, formule a resposta final para a pergunta original ('{cleaned_input}') utilizando as informações da internet acima."
+                final_result = await self.classify_intent(chat_id, instruction, save_to_history=False)
+                
+                # Remover o contexto temporário do histórico
+                history = self.memory.get_history(chat_id)
+                if history and history[-1]["role"] == "system":
+                    history.pop()
+                    logger.debug("Removido o contexto temporário do histórico de mensagens.")
+                
+                # Retorna o resultado refinado finalizado
+                return final_result
+                
+            else:
+                # Chat Geral / Outras Ações não mapeadas
+                return validated_action
+                
+        except Exception as e:
+            logger.error(f"Erro não tratado na execução da ferramenta: {e}")
+            return self.feedback_loop(action_type, str(e))
