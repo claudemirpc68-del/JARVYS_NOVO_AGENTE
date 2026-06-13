@@ -174,14 +174,14 @@ async def groq_chat(chat_id: int, query: str) -> dict:
 
 REGRAS CRÍTICAS PARA ENVIO DE E-MAIL:
 1. Se o usuario pedir para enviar um e-mail para um NOME (ex: "Joao", "Maria", "esposa") in vez de um endereço de e-mail completo (com "@"), você deve OBRIGATORIAMENTE retornar a ação "contacts" primeiro para pesquisar o e-mail correspondente no Google Contatos.
-2. Apenas retorne a ação "send" se você tiver um endereço de e-mail válido (contendo "@") no campo "to".
-3. Se faltarem dados essenciais para o envio (como assunto ou corpo) e você já tiver o e-mail completo, use a ação "ask".
+2. Apenas retorne a ação "send" se você tiver um endereço de e-mail válido (contendo "@") no campo "to" E o usuário tiver fornecido a aprovação ou confirmação explícita de envio (ex: "pode enviar", "envie", "sim", "confirmo").
+3. Se você precisar criar ou sugerir a mensagem do e-mail (conforme regra 4), use a ação "chat" ou "ask" para apresentar a mensagem sugerida ao usuário e solicitar a sua aprovação explícita de envio. NUNCA envie (ação "send") de imediato sem que o usuário aprove o texto que você escreveu.
 4. Se o usuário fornecer o assunto/contexto do e-mail mas não detalhar o texto exato do corpo, você deve REDIGIR de forma autônoma um corpo de mensagem completo, profissional, amigável e contextualmente adequado. Nunca deixe a mensagem/corpo de e-mail em branco ou vazio.
 
-Se quer ENVIAR email e já possui o e-mail completo (com "@"):
+Se quer ENVIAR email e já possui o e-mail completo (com "@") e aprovação do usuário:
 {{"action":"send","to":"email_com_arroba","subject":"assunto","body":"corpo","response":"Enviando..."}}
 
-Se quer ENVIAR email mas faltam dados e você já possui o e-mail completo (com "@"):
+Se quer ENVIAR email mas faltam dados (como assunto ou e-mail do destinatário):
 {{"action":"ask","response":"Olá, Claudemir! Para enviar, preciso de:\\n- Assunto\\n- Mensagem"}}
 
 Se quer VER emails:
