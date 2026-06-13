@@ -43,11 +43,13 @@ SCOPES = [
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/gmail.modify',
     'https://www.googleapis.com/auth/gmail.compose',
-    'https://www.googleapis.com/auth/contacts.readonly'
+    'https://www.googleapis.com/auth/contacts.readonly',
+    'https://www.googleapis.com/auth/calendar'
 ]
 
 gmail_service = None
 people_service = None
+calendar_service = None
 
 def get_creds():
     if not GOOGLE_TOKEN.exists():
@@ -85,6 +87,20 @@ def get_people():
         people_service = build('people', 'v1', credentials=creds)
         return people_service
     except:
+        return None
+
+def get_calendar():
+    global calendar_service
+    if calendar_service:
+        return calendar_service
+    creds = get_creds()
+    if not creds:
+        return None
+    try:
+        calendar_service = build('calendar', 'v3', credentials=creds)
+        return calendar_service
+    except Exception as e:
+        logger.error(f"Erro ao inicializar Calendar: {e}")
         return None
 
 def search_contacts(query):
@@ -177,6 +193,57 @@ def get_emails(limit=5):
         emails.append(f"De: {headers.get('From','?')}\nAssunto: {headers.get('Subject','?')}\nData: {headers.get('Date','?')}")
     return emails, None
 
+def create_event(title, start_iso, end_iso, description="", attendees=None):
+    svc = get_calendar()
+    if not svc:
+        return None, "Google Calendar nao autenticado. Envie /auth para autenticar."
+    try:
+        event = {
+            'summary': title,
+            'description': description,
+            'start': {
+                'dateTime': start_iso,
+                'timeZone': 'America/Sao_Paulo',
+            },
+            'end': {
+                'dateTime': end_iso,
+                'timeZone': 'America/Sao_Paulo',
+            }
+        }
+        if attendees:
+            resolved_attendees = []
+            for att in attendees:
+                resolved_email, _, _ = resolve_email_address(att)
+                if resolved_email:
+                    resolved_attendees.append({'email': resolved_email})
+                else:
+                    resolved_attendees.append({'email': att})
+            event['attendees'] = resolved_attendees
+            
+        created_event = svc.events().insert(calendarId='primary', body=event, sendUpdates='all').execute()
+        return created_event, None
+    except Exception as e:
+        return None, str(e)
+
+def list_events(start_iso=None, end_iso=None, max_results=10):
+    svc = get_calendar()
+    if not svc:
+        return None, "Google Calendar nao autenticado. Envie /auth para autenticar."
+    try:
+        if not start_iso:
+            start_iso = datetime.now().isoformat() + 'Z'
+        events_result = svc.events().list(
+            calendarId='primary',
+            timeMin=start_iso,
+            timeMax=end_iso if end_iso else None,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        return events_result.get('items', []), None
+    except Exception as e:
+        return None, str(e)
+
 # Memória de conversação por chat_id
 chat_memories = {}
 
@@ -198,10 +265,27 @@ async def groq_chat(chat_id: int, query: str) -> dict:
     contacts_list = get_all_contacts()
     contacts_str = "\n".join(contacts_list) if contacts_list else "Nenhum contato encontrado ou Google Contacts nao autenticado."
 
-    prompt = f"""Voce e o JARVIS 2.0, assistente de email via Telegram de Claudemir Pedroso Cubas (email padrao: claudemirpc68@gmail.com). Responda SEMPRE em JSON.
+    # Dia da semana para ajudar na conversão de datas relativas (ex: amanhã, segunda-feira)
+    weekdays = ["segunda-feira", "terca-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sabado", "domingo"]
+    today_weekday = weekdays[datetime.now().weekday()]
+
+    prompt = f"""Voce e o JARVIS 2.0, assistente pessoal de Claudemir Pedroso Cubas (email padrao: claudemirpc68@gmail.com). Responda SEMPRE em JSON.
 
 SUA LISTA DE CONTATOS ATUAL (Use para associar nomes a e-mails diretamente):
 {contacts_str}
+
+REGRAS DO GOOGLE CALENDAR (CALENDÁRIO):
+1. Para criar eventos: Você precisa do título, data/hora de início e fim no formato ISO 8601 (ex: "2026-06-12T15:00:00-03:00"). O fuso horário padrão é America/Sao_Paulo (UTC-3).
+2. Se o usuário disser datas relativas (ex: "amanhã", "próxima segunda"), calcule com base na Data Atual abaixo. Lembre que hoje é {today_weekday}.
+3. Se o usuário quiser convidar alguém (ex: "marcar reunião com Joelma"), busque o e-mail correspondente na SUA LISTA DE CONTATOS ATUAL e coloque a lista de e-mails em "attendees".
+4. Se faltar a duração do compromisso, use 1 hora como padrão.
+5. Se quer ver a agenda, filtre pelo período adequado (início e fim em formato ISO 8601).
+
+AÇÕES DE CALENDÁRIO:
+- Criar evento:
+{{"action":"calendar_create","title":"Reuniao","start":"2026-06-13T15:00:00-03:00","end":"2026-06-13T16:00:00-03:00","description":"detalhes","attendees":["email1@teste.com"],"response":"Criando o evento na sua agenda..."}}
+- Listar agenda:
+{{"action":"calendar_list","start":"2026-06-13T00:00:00-03:00","end":"2026-06-13T23:59:59-03:00","response":"Buscando seus compromissos..."}}
 
 REGRAS CRÍTICAS PARA ENVIO DE E-MAIL:
 1. Se o usuario pedir para enviar um e-mail para um NOME (ex: "Joao", "Maria", "esposa") in vez de um endereço de e-mail completo (com "@"), você deve verificar se ele existe na SUA LISTA DE CONTATOS ATUAL acima. Se existir, use o e-mail correspondente. Caso contrário, ou em caso de ambiguidade, retorne a ação "contacts" primeiro para pesquisar o e-mail correspondente no Google Contatos.
@@ -209,25 +293,23 @@ REGRAS CRÍTICAS PARA ENVIO DE E-MAIL:
 3. Se você precisar criar ou sugerir a mensagem do e-mail (conforme regra 4), use a ação "chat" ou "ask" para apresentar a mensagem sugerida ao usuário e solicitar a sua aprovação explícita de envio. NUNCA envie (ação "send") de imediato sem que o usuário aprove o texto que você escreveu.
 4. Se o usuário fornecer o assunto/contexto do e-mail mas não detalhar o texto exato do corpo, você deve REDIGIR de forma autônoma um corpo de mensagem completo, profissional, amigável e contextualmente adequado. Nunca deixe a mensagem/corpo de e-mail em branco ou vazio.
 
-Se quer ENVIAR email e já possui o e-mail completo (com "@") e aprovação do usuário:
+AÇÕES DE E-MAIL:
+- Enviar e-mail:
 {{"action":"send","to":"email_com_arroba","subject":"assunto","body":"corpo","response":"Enviando..."}}
-
-Se quer ENVIAR email mas faltam dados (como assunto ou e-mail do destinatário):
+- Pedir dados faltantes:
 {{"action":"ask","response":"Olá, Claudemir! Para enviar, preciso de:\\n- Assunto\\n- Mensagem"}}
-
-Se quer VER emails:
+- Ver e-mails:
 {{"action":"list","limit":5,"response":"Buscando seus emails, Claudemir..."}}
 
-Se o usuário quer enviar e-mail para um NOME que não está nos contatos acima, ou quer buscar/saber o e-mail de alguém na agenda do Google Contatos:
+OUTRAS AÇÕES:
+- Buscar contatos:
 {{"action":"contacts","query":"nome_do_contato","response":"Buscando o e-mail de nome_do_contato nos seus contatos..."}}
-
-Se quer AUTENTICAR Gmail:
-{{"action":"auth","response":"Acesse para autenticar seu Gmail: {get_auth_url()}"}}
-
-Se e pergunta/saudacao geral (ou perguntas sobre seu nome/email):
+- Autenticar:
+{{"action":"auth","response":"Acesse para autenticar seu Gmail e Calendario: {get_auth_url()}"}}
+- Chat Geral:
 {{"action":"chat","response":"sua resposta para Claudemir"}}
 
-Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}"""
+Data/Hora Atual: {datetime.now().strftime('%d/%m/%Y %H:%M')} (Fuso: America/Sao_Paulo)"""
 
     # Adicionar mensagem do usuário ao histórico
     add_to_history(chat_id, "user", query)
@@ -352,6 +434,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             options = [f"• **{c['name']}**: {c['email']}" for c in contacts]
             response_text = f"Olá, Claudemir! Encontrei os seguintes contatos para '{search_query}':\n\n" + "\n".join(options)
+        await update.message.reply_text(response_text)
+    elif action == "calendar_create":
+        title = result.get("title", "")
+        start = result.get("start", "")
+        end = result.get("end", "")
+        description = result.get("description", "")
+        attendees = result.get("attendees", [])
+        
+        event, err = create_event(title, start, end, description, attendees)
+        if err:
+            response_text = f"Erro ao criar evento: {err}"
+        else:
+            response_text = f"✅ Evento '{event.get('summary')}' criado com sucesso!\nLink do Google Calendar: {event.get('htmlLink')}"
+        await update.message.reply_text(response_text)
+    elif action == "calendar_list":
+        start = result.get("start", "")
+        end = result.get("end", "")
+        events, err = list_events(start, end)
+        if err:
+            response_text = f"Erro ao buscar eventos: {err}"
+        elif not events:
+            response_text = "Nenhum evento encontrado na agenda para o período solicitado."
+        else:
+            lines = []
+            for ev in events:
+                start_time = ev.get('start', {}).get('dateTime') or ev.get('start', {}).get('date')
+                try:
+                    dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    dt_str = dt.strftime('%d/%m às %H:%M')
+                except:
+                    dt_str = start_time
+                lines.append(f"• **{ev.get('summary')}** — {dt_str}")
+            response_text = "📅 Seus compromissos encontrados:\n\n" + "\n".join(lines)
         await update.message.reply_text(response_text)
     elif action == "auth":
         response_text = result.get("response", "")
