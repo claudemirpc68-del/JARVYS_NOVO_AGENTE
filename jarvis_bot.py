@@ -106,6 +106,30 @@ def search_contacts(query):
     except Exception as e:
         return [], str(e)
 
+def get_all_contacts():
+    svc = get_people()
+    if not svc:
+        return []
+    try:
+        results = svc.people().connections().list(
+            resourceName='people/me',
+            pageSize=250,
+            personFields='names,emailAddresses'
+        ).execute()
+        connections = results.get('connections', [])
+        contacts = []
+        for person in connections:
+            names = person.get('names', [])
+            emails = person.get('emailAddresses', [])
+            name = names[0].get('displayName', 'Sem Nome') if names else 'Sem Nome'
+            email = emails[0].get('value', '') if emails else ''
+            if email:
+                contacts.append(f"{name} ({email})")
+        return contacts
+    except Exception as e:
+        logger.error(f"Erro ao listar todos os contatos: {e}")
+        return []
+
 def resolve_email_address(email_or_name):
     email_or_name = email_or_name.strip()
     if "@" in email_or_name:
@@ -170,10 +194,17 @@ def add_to_history(chat_id, role, content):
 
 # IA
 async def groq_chat(chat_id: int, query: str) -> dict:
+    # Buscar os contatos para injetar no Prompt do sistema
+    contacts_list = get_all_contacts()
+    contacts_str = "\n".join(contacts_list) if contacts_list else "Nenhum contato encontrado ou Google Contacts nao autenticado."
+
     prompt = f"""Voce e o JARVIS 2.0, assistente de email via Telegram de Claudemir Pedroso Cubas (email padrao: claudemirpc68@gmail.com). Responda SEMPRE em JSON.
 
+SUA LISTA DE CONTATOS ATUAL (Use para associar nomes a e-mails diretamente):
+{contacts_str}
+
 REGRAS CRÍTICAS PARA ENVIO DE E-MAIL:
-1. Se o usuario pedir para enviar um e-mail para um NOME (ex: "Joao", "Maria", "esposa") in vez de um endereço de e-mail completo (com "@"), você deve OBRIGATORIAMENTE retornar a ação "contacts" primeiro para pesquisar o e-mail correspondente no Google Contatos.
+1. Se o usuario pedir para enviar um e-mail para um NOME (ex: "Joao", "Maria", "esposa") in vez de um endereço de e-mail completo (com "@"), você deve verificar se ele existe na SUA LISTA DE CONTATOS ATUAL acima. Se existir, use o e-mail correspondente. Caso contrário, ou em caso de ambiguidade, retorne a ação "contacts" primeiro para pesquisar o e-mail correspondente no Google Contatos.
 2. Apenas retorne a ação "send" se você tiver um endereço de e-mail válido (contendo "@") no campo "to" E o usuário tiver fornecido a aprovação ou confirmação explícita de envio (ex: "pode enviar", "envie", "sim", "confirmo").
 3. Se você precisar criar ou sugerir a mensagem do e-mail (conforme regra 4), use a ação "chat" ou "ask" para apresentar a mensagem sugerida ao usuário e solicitar a sua aprovação explícita de envio. NUNCA envie (ação "send") de imediato sem que o usuário aprove o texto que você escreveu.
 4. Se o usuário fornecer o assunto/contexto do e-mail mas não detalhar o texto exato do corpo, você deve REDIGIR de forma autônoma um corpo de mensagem completo, profissional, amigável e contextualmente adequado. Nunca deixe a mensagem/corpo de e-mail em branco ou vazio.
@@ -187,7 +218,7 @@ Se quer ENVIAR email mas faltam dados (como assunto ou e-mail do destinatário):
 Se quer VER emails:
 {{"action":"list","limit":5,"response":"Buscando seus emails, Claudemir..."}}
 
-Se o usuário quer enviar e-mail para um NOME, ou quer apenas buscar/saber o e-mail de alguém na agenda do Google Contatos:
+Se o usuário quer enviar e-mail para um NOME que não está nos contatos acima, ou quer buscar/saber o e-mail de alguém na agenda do Google Contatos:
 {{"action":"contacts","query":"nome_do_contato","response":"Buscando o e-mail de nome_do_contato nos seus contatos..."}}
 
 Se quer AUTENTICAR Gmail:
