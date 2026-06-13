@@ -22,6 +22,7 @@ class JarvisOrchestrator:
         self.memory = JarvisMemory()
         self.security = JarvisSecurity()
         self.groq_api_key = config.api.groq_api_key or os.environ.get("GROQ_API_KEY", "")
+        self.openrouter_api_key = config.api.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
         
         # Caminho absoluto para o system prompt
         self.prompt_path = Path(__file__).parent.parent / "llm_persona" / "system_prompt.txt"
@@ -38,7 +39,7 @@ class JarvisOrchestrator:
         """Interface para gerenciar e persistir o histórico de conversação do chat"""
         self.memory.add_message(chat_id, role, content)
 
-    async def classify_intent(self, chat_id: int, text: str, save_to_history: bool = True) -> dict:
+    async def classify_intent(self, chat_id: int, text: str, save_to_history: bool = True, ignore_history: bool = False, force_json: bool = True) -> dict | str:
         """
         Classifica a intenção do usuário chamando o Groq API em formato JSON estruturado.
         Substitui dinamicamente as variáveis de prompt (data/hora, contatos e URL de auth).
@@ -67,7 +68,7 @@ class JarvisOrchestrator:
         if save_to_history:
             self.update_memory(chat_id, "user", text)
             
-        history = self.memory.get_history(chat_id)
+        history = [] if ignore_history else self.memory.get_history(chat_id)
         
         # Se save_to_history for False (ex: chamada recursiva da busca web),
         # incluímos a query de instrução temporariamente no payload enviado à API do Groq
@@ -77,26 +78,47 @@ class JarvisOrchestrator:
             messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": text}]
             
         try:
-            logger.info("Chamando a API do Groq para classificação de intenção...")
             async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
+                if self.openrouter_api_key:
+                    logger.info("Chamando a API do OpenRouter para classificação de intenção...")
+                    url = "https://openrouter.ai/api/v1/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {self.openrouter_api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/claudemirpc68-del/jarvis-2.0",
+                        "X-Title": "JARVIS 2.0"
+                    }
+                    model = "meta-llama/llama-3.3-70b-instruct"
+                else:
+                    logger.info("Chamando a API do Groq para classificação de intenção...")
+                    url = "https://api.groq.com/openai/v1/chat/completions"
+                    headers = {
                         "Authorization": f"Bearer {self.groq_api_key}",
                         "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": messages,
-                        "temperature": 0.7,
-                        "response_format": {"type": "json_object"}
-                    },
+                    }
+                    model = "llama-3.3-70b-versatile"
+
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7
+                }
+                if force_json:
+                    payload["response_format"] = {"type": "json_object"}
+
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
                     timeout=30
                 )
                 
                 if resp.status_code == 200:
                     content = resp.json()["choices"][0]["message"]["content"]
                     logger.debug(f"Retorno bruto do Groq: {content}")
+                    
+                    if not force_json:
+                        return content
                     
                     # Tentar carregar como JSON diretamente
                     try:
@@ -115,6 +137,10 @@ class JarvisOrchestrator:
                                 raise jde
                         else:
                             raise jde
+                        
+                    # Desembrulhar lista de um único item gerada por alguns modelos (OpenRouter Llama 3.3)
+                    if isinstance(parsed_json, list) and len(parsed_json) > 0:
+                        parsed_json = parsed_json[0]
                         
                     logger.info(f"Intenção classificada: {parsed_json.get('action')}")
                     return parsed_json
@@ -329,7 +355,7 @@ class JarvisOrchestrator:
                     prompt += "\n\nNOTA DE EVITAR DUPLICIDADE: Você já gerou um post/artigo sobre este tema. Crie um conteúdo sob uma perspectiva completamente diferente para não ser repetitivo!"
                 
                 # 3. Chamar a LLM (Groq) sem salvar esta instrução de escrita no histórico de conversação
-                final_result = await self.classify_intent(chat_id, prompt, save_to_history=False)
+                final_result = await self.classify_intent(chat_id, prompt, save_to_history=False, ignore_history=True, force_json=False)
                 generated_content = ""
                 
                 if isinstance(final_result, dict):
@@ -385,8 +411,8 @@ class JarvisOrchestrator:
                     shorten_instruction = f"Seu texto anterior excedeu o limite de caracteres do LinkedIn (tamanho atual: {size}, limite: {limit}). Por favor, reescreva-o de forma mais objetiva e concisa, sem perder a qualidade, garantindo que fique com menos de {limit} caracteres."
                     self.update_memory(chat_id, "system", f"[SISTEMA: Rascunho anterior de tamanho inválido]\n\n{generated_content}")
                     
-                    final_result = await self.classify_intent(chat_id, shorten_instruction, save_to_history=False)
-                    generated_content = final_result.get("response", generated_content)
+                    final_result = await self.classify_intent(chat_id, shorten_instruction, save_to_history=False, force_json=False)
+                    generated_content = final_result if isinstance(final_result, str) else final_result.get("response", generated_content)
                     
                     # Remover rascunho inválido da memória
                     history = self.memory.get_history(chat_id)

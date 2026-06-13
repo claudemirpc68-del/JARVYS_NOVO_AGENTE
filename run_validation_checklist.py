@@ -38,6 +38,9 @@ async def run_test_case(orchestrator, chat_id, title, user_input, validation_fn)
             
         print(f"  Saída: {response_text[:120]}...")
         
+        # Atualizar a memória do chat com a resposta final do assistente (JARVIS), simulando o bot real
+        orchestrator.update_memory(chat_id, "assistant", response_text)
+        
         # Delay de 5.5 segundos para respeitar a taxa de requisições de tokens do Groq
         await asyncio.sleep(5.5)
         

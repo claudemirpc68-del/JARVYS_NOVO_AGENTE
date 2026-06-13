@@ -20,6 +20,7 @@ class APIConfig:
     telegram_token: str
     tavily_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None  # Mantido para compatibilidade
+    openrouter_api_key: Optional[str] = None
     
 @dataclass
 class GoogleConfig:
@@ -66,7 +67,8 @@ class Config:
             groq_api_key=self._get_env("GROQ_API_KEY"),
             telegram_token=self._get_env("TELEGRAM_TOKEN"),
             tavily_api_key=self._get_env("TAVILY_API_KEY", None),
-            openai_api_key=self._get_env("OPENAI_API_KEY", None)  # Opcional para compatibilidade
+            openai_api_key=self._get_env("OPENAI_API_KEY", None),  # Opcional para compatibilidade
+            openrouter_api_key=self._get_env("OPENROUTER_API_KEY", None)
         )
         self.google = GoogleConfig(
             credentials_path=self._get_env("GOOGLE_CREDENTIALS_PATH", "credentials.json"),
