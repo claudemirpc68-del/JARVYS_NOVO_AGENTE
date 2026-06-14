@@ -446,7 +446,9 @@ class JarvisOrchestrator:
                 
                 # Chamar novamente o Groq (IA) com save_to_history=False para obter o resumo/resposta final
                 instruction = f"Por favor, formule a resposta final para a pergunta original ('{cleaned_input}') utilizando as informações da internet acima."
-                final_result = await self.classify_intent(chat_id, instruction, save_to_history=False)
+                final_result = await self.classify_intent(chat_id, instruction, save_to_history=False, force_json=False)
+                if isinstance(final_result, str):
+                    final_result = {"action": "chat", "response": final_result}
                 
                 # Remover o contexto temporário do histórico
                 history = self.memory.get_history(chat_id)
