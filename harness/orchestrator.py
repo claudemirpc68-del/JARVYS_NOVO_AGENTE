@@ -448,7 +448,17 @@ class JarvisOrchestrator:
                 instruction = f"Por favor, formule a resposta final para a pergunta original ('{cleaned_input}') utilizando as informações da internet acima."
                 final_result = await self.classify_intent(chat_id, instruction, save_to_history=False, force_json=False)
                 if isinstance(final_result, str):
-                    final_result = {"action": "chat", "response": final_result}
+                    try:
+                        # Limpar espaços em branco e tentar decodificar JSON
+                        cleaned_res = final_result.strip()
+                        parsed = json.loads(cleaned_res)
+                        if isinstance(parsed, dict):
+                            response_text = parsed.get("response") or parsed.get("text") or parsed.get("response_text") or final_result
+                            final_result = {"action": "chat", "response": response_text}
+                        else:
+                            final_result = {"action": "chat", "response": final_result}
+                    except Exception:
+                        final_result = {"action": "chat", "response": final_result}
                 
                 # Remover o contexto temporário do histórico
                 history = self.memory.get_history(chat_id)
