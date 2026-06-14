@@ -1,3 +1,6 @@
+import json
+import os
+from pathlib import Path
 from harness.logger import logger
 
 class JarvisMemory:
@@ -6,9 +9,35 @@ class JarvisMemory:
         self.chat_memories = {}
         # Limite padrão de mensagens mantidas para histórico de contexto
         self.default_limit = 15
+        # Caminho para persistência em disco na raiz do projeto
+        self.file_path = Path(__file__).parent.parent / "chat_memories.json"
+        
+        # Carregar memórias persistidas
+        self.load_from_disk()
 
-        # Espaço reservado para cliente de banco vetorial (opcional futuro)
-        # self.vector_db_client = None
+    def load_from_disk(self) -> None:
+        """Carrega o histórico de mensagens do disco se o arquivo JSON existir"""
+        try:
+            if self.file_path.exists():
+                data = json.loads(self.file_path.read_text(encoding="utf-8"))
+                # Converter chaves do JSON (strings) de volta para int
+                self.chat_memories = {int(k): v for k, v in data.items()}
+                logger.info(f"Histórico de conversação carregado com sucesso do disco ({len(self.chat_memories)} chats).")
+            else:
+                self.chat_memories = {}
+        except Exception as e:
+            logger.error(f"Erro ao carregar histórico de conversação do disco: {e}")
+            self.chat_memories = {}
+
+    def save_to_disk(self) -> None:
+        """Salva o histórico de mensagens atual no disco"""
+        try:
+            # Converter chaves para string no JSON
+            data = {str(k): v for k, v in self.chat_memories.items()}
+            self.file_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            logger.debug("Histórico de conversação salvo com sucesso no disco.")
+        except Exception as e:
+            logger.error(f"Erro ao salvar histórico de conversação no disco: {e}")
 
     def get_history(self, chat_id: int) -> list:
         """Obtém o histórico de mensagens completo para um chat específico"""
@@ -23,9 +52,7 @@ class JarvisMemory:
         
         self.chat_memories[chat_id].append({"role": role, "content": content})
         self.prune_history(chat_id)
-        
-        # Opcional futuro: Gravar interação no banco vetorial para busca de longo prazo
-        # self._store_in_vector_db(chat_id, role, content)
+        self.save_to_disk()
 
     def prune_history(self, chat_id: int, limit: int = None) -> None:
         """Mantém apenas as últimas X mensagens no histórico do chat para evitar estouro de contexto"""
@@ -40,14 +67,8 @@ class JarvisMemory:
     def clear_history(self, chat_id: int) -> None:
         """Limpa todo o histórico de conversação do chat"""
         self.chat_memories[chat_id] = []
+        self.save_to_disk()
         logger.info(f"Histórico de conversação do chat {chat_id} limpo.")
-
-    def _store_in_vector_db(self, chat_id: int, role: str, content: str):
-        """
-        Placeholder para armazenar embeddings das conversas em um banco vetorial
-        como ChromaDB ou FAISS para busca semântica de longo prazo.
-        """
-        pass
 
     def search_semantic_memory(self, chat_id: int, query: str, top_k: int = 3) -> list:
         """

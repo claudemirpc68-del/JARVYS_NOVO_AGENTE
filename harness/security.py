@@ -76,12 +76,31 @@ class JarvisSecurity:
         if not last_messages:
             return False
             
+        # 1. Encontrar a última mensagem do assistente no histórico
+        last_assistant_msg = None
+        for m in reversed(last_messages):
+            if m["role"] == "assistant":
+                last_assistant_msg = m["content"].lower()
+                break
+                
+        # Se não há mensagem do assistente solicitando confirmação, não pode ser considerado confirmado
+        if not last_assistant_msg or not any(word in last_assistant_msg for word in ["confirma", "deseja", "confirmar"]):
+            logger.info("Tentativa de confirmação ignorada: o assistente não solicitou confirmação recentemente.")
+            return False
+            
         # Analisar as mensagens do usuário de trás para frente no histórico recente (últimas 3 mensagens)
         user_responses = [m["content"].lower().strip() for m in last_messages if m["role"] == "user"]
         if not user_responses:
             return False
             
         last_response = user_responses[-1]
+        
+        # Se o usuário explicitamente negar ou cancelar, não é confirmação
+        negation_words = ["não", "nao", "cancelar", "cancela", "mudar", "alterar", "ajustar"]
+        if any(word in last_response for word in negation_words):
+            logger.info(f"Negação do usuário detectada: '{last_response}'")
+            return False
+            
         affirmative_words = ["sim", "confirmo", "pode enviar", "envie", "ok", "pode", "autorizo", "prosseguir", "deletar", "apagar"]
         
         # Verifica se alguma palavra afirmativa está contida na última resposta do usuário

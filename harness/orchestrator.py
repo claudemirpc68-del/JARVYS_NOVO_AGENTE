@@ -16,6 +16,7 @@ import tools.contacts_tool as contacts
 import tools.calendar_tool as calendar
 import tools.tavily_tool as tavily
 import tools.linkedin_tool as linkedin
+import tools.weather_tool as weather
 
 class JarvisOrchestrator:
     def __init__(self):
@@ -23,6 +24,7 @@ class JarvisOrchestrator:
         self.security = JarvisSecurity()
         self.groq_api_key = config.api.groq_api_key or os.environ.get("GROQ_API_KEY", "")
         self.openrouter_api_key = config.api.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.gemini_api_key = config.api.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
         
         # Caminho absoluto para o system prompt
         self.prompt_path = Path(__file__).parent.parent / "llm_persona" / "system_prompt.txt"
@@ -42,12 +44,8 @@ class JarvisOrchestrator:
     async def classify_intent(self, chat_id: int, text: str, save_to_history: bool = True, ignore_history: bool = False, force_json: bool = True) -> dict | str:
         """
         Classifica a intenção do usuário chamando o Groq API em formato JSON estruturado.
-        Substitui dinamicamente as variáveis de prompt (data/hora, contatos e URL de auth).
+        Substitui dinamicamente as variáveis de prompt (data/hora e URL de auth).
         """
-        # Carregar contatos para injeção de prompt
-        contacts_list = contacts.get_all_contacts()
-        contacts_str = "\n".join(contacts_list) if contacts_list else "Nenhum contato encontrado ou Google Contacts nao autenticado."
-        
         # Dia da semana e fuso horário
         weekdays = ["segunda-feira", "terca-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sabado", "domingo"]
         today_weekday = weekdays[datetime.now().weekday()]
@@ -58,7 +56,6 @@ class JarvisOrchestrator:
         
         # Formatar o prompt do sistema dinamicamente
         system_prompt = self.base_prompt.format(
-            contacts_str=contacts_str,
             today_weekday=today_weekday,
             auth_url=auth_url,
             datetime_now=datetime_now_str
@@ -77,74 +74,69 @@ class JarvisOrchestrator:
         else:
             messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": text}]
             
-        try:
-            async with httpx.AsyncClient() as client:
-                if self.openrouter_api_key:
-                    logger.info("Chamando a API do OpenRouter para classificação de intenção...")
-                    url = "https://openrouter.ai/api/v1/chat/completions"
-                    headers = {
-                        "Authorization": f"Bearer {self.openrouter_api_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://github.com/claudemirpc68-del/jarvis-2.0",
-                        "X-Title": "JARVIS 2.0"
-                    }
-                    model = "meta-llama/llama-3.3-70b-instruct"
-                else:
-                    logger.info("Chamando a API do Groq para classificação de intenção...")
-                    url = "https://api.groq.com/openai/v1/chat/completions"
-                    headers = {
-                        "Authorization": f"Bearer {self.groq_api_key}",
-                        "Content-Type": "application/json"
-                    }
-                    model = "llama-3.3-70b-versatile"
+        # Definir a cadeia de provedores a tentar
+        attempts = []
+        if self.openrouter_api_key:
+            attempts.append(("openrouter", "meta-llama/llama-3.3-70b-instruct"))
+        if self.groq_api_key:
+            attempts.append(("groq", "llama-3.3-70b-versatile"))
+            attempts.append(("groq", "llama-3.1-8b-instant"))
+        if self.gemini_api_key:
+            attempts.append(("gemini", "gemini-flash-latest"))
 
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": 0.7,
-                    "max_tokens": 2048
-                }
-                if force_json:
-                    payload["response_format"] = {"type": "json_object"}
-
-                resp = await client.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=30
-                )
-                
-                # Fallback automático do OpenRouter para o Groq em caso de erros de cota/limite (402 ou 429)
-                if self.openrouter_api_key and resp.status_code in [402, 429]:
-                    logger.warning(f"OpenRouter retornou erro {resp.status_code}. Tentando fallback automático para o Groq API...")
-                    fallback_url = "https://api.groq.com/openai/v1/chat/completions"
-                    fallback_headers = {
-                        "Authorization": f"Bearer {self.groq_api_key}",
-                        "Content-Type": "application/json"
+        last_error = None
+        
+        async with httpx.AsyncClient() as client:
+            for provider, model_name in attempts:
+                logger.info(f"Tentando classificar intenção com {provider} ({model_name})...")
+                try:
+                    if provider == "gemini":
+                        result = await self._call_gemini_api(system_prompt, messages, force_json)
+                        logger.info(f"Classificação com Gemini ({model_name}) realizada com sucesso.")
+                        return result
+                        
+                    if provider == "openrouter":
+                        url = "https://openrouter.ai/api/v1/chat/completions"
+                        headers = {
+                            "Authorization": f"Bearer {self.openrouter_api_key}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://github.com/claudemirpc68-del/jarvis-2.0",
+                            "X-Title": "JARVIS 2.0"
+                        }
+                    else:  # groq
+                        url = "https://api.groq.com/openai/v1/chat/completions"
+                        headers = {
+                            "Authorization": f"Bearer {self.groq_api_key}",
+                            "Content-Type": "application/json"
+                        }
+                        
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": 2048
                     }
-                    fallback_payload = payload.copy()
-                    fallback_payload["model"] = "llama-3.1-8b-instant"
+                    if force_json:
+                        payload["response_format"] = {"type": "json_object"}
+                        
+                    resp = await client.post(url, headers=headers, json=payload, timeout=30)
                     
-                    resp = await client.post(
-                        fallback_url,
-                        headers=fallback_headers,
-                        json=fallback_payload,
-                        timeout=30
-                    )
-                
-                if resp.status_code == 200:
+                    if resp.status_code != 200:
+                        logger.error(f"Erro na API {provider} ({model_name}): Status {resp.status_code} - {resp.text}")
+                        raise Exception(f"API {provider} retornou status {resp.status_code}")
+                        
                     content = resp.json()["choices"][0]["message"]["content"]
-                    logger.debug(f"Retorno bruto do Groq: {content}")
+                    logger.debug(f"Retorno bruto de {provider} ({model_name}): {content}")
                     
                     if not force_json:
                         return content
-                    
-                    # Tentar carregar como JSON diretamente
+                        
+                    # Tentar carregar como JSON
                     try:
                         parsed_json = json.loads(content)
                     except json.JSONDecodeError as jde:
-                        logger.warning(f"Falha ao parsear JSON direto, tentando extrair bloco markdown ou objeto: {jde}")
-                        # 1. Tentar extrair de blocos de código markdown (```json ... ```)
+                        logger.warning(f"Falha ao parsear JSON direto de {provider}, tentando extrair bloco ou braces: {jde}")
+                        # 1. Tentar extrair de blocos de código markdown
                         if "```" in content:
                             m = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
                             if m:
@@ -153,8 +145,7 @@ class JarvisOrchestrator:
                                     return parsed_json
                                 except json.JSONDecodeError:
                                     pass
-                        
-                        # 2. Tentar encontrar o primeiro '{' e o último '}' para isolar o objeto JSON
+                        # 2. Tentar encontrar braces
                         first_brace = content.find('{')
                         last_brace = content.rfind('}')
                         if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
@@ -163,22 +154,107 @@ class JarvisOrchestrator:
                                 return parsed_json
                             except json.JSONDecodeError:
                                 pass
-                        
                         raise jde
                         
-                    # Desembrulhar lista de um único item gerada por alguns modelos (OpenRouter Llama 3.3)
                     if isinstance(parsed_json, list) and len(parsed_json) > 0:
                         parsed_json = parsed_json[0]
                         
-                    logger.info(f"Intenção classificada: {parsed_json.get('action')}")
+                    logger.info(f"Intenção classificada com {provider} ({model_name}): {parsed_json.get('action')}")
                     return parsed_json
-                else:
-                    logger.error(f"Erro na API do Groq: Status {resp.status_code} - {resp.text}")
-                    return {"action": "chat", "response": f"Erro de comunicação com a IA (Status {resp.status_code})."}
                     
-        except Exception as e:
-            logger.error(f"Exceção ao chamar Groq: {e}")
-            return {"action": "chat", "response": f"Erro interno de processamento da IA: {e}"}
+                except Exception as attempt_err:
+                    logger.warning(f"Falha na tentativa com {provider} ({model_name}): {attempt_err}")
+                    last_error = attempt_err
+                    
+        # Se saiu do loop, todos falharam
+        logger.error(f"Todos os provedores na cadeia de classificação falharam. Último erro: {last_error}")
+        if force_json:
+            return {"action": "chat", "response": f"Erro interno de processamento da IA: todos os provedores falharam. Detalhe: {last_error}"}
+        return f"Erro interno de processamento da IA: todos os provedores falharam. Detalhe: {last_error}"
+
+    async def _call_gemini_api(self, system_prompt: str, messages: list, force_json: bool = True) -> dict | str:
+        """
+        Chama a API do Google Gemini (usando gemini-1.5-flash) como fallback.
+        Traduz o formato das mensagens e força o retorno em JSON se necessário.
+        """
+        import httpx
+        
+        # Filtrar o prompt do sistema e converter o resto das mensagens para o formato do Gemini
+        gemini_contents = []
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            
+            if role == "system":
+                continue
+                
+            gemini_role = "user" if role == "user" else "model"
+            gemini_contents.append({
+                "role": gemini_role,
+                "parts": [{"text": content}]
+            })
+            
+        model_name = "gemini-flash-latest"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_api_key}"
+        
+        payload = {
+            "contents": gemini_contents,
+            "systemInstruction": {
+                "parts": [{"text": system_prompt}]
+            },
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 2048
+            }
+        }
+        
+        if force_json:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+            
+        logger.info(f"Chamando a API do Google Gemini ({model_name})...")
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=30)
+            
+            if resp.status_code == 200:
+                resp_json = resp.json()
+                try:
+                    content = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError) as parse_err:
+                    logger.error(f"Erro ao analisar resposta estruturada do Gemini: {parse_err}. Resposta bruta: {resp_json}")
+                    raise ValueError(f"Resposta inválida do Gemini: {parse_err}")
+                
+                logger.debug(f"Retorno bruto do Gemini: {content}")
+                
+                if not force_json:
+                    return content
+                
+                # Tratar parseamento do JSON
+                try:
+                    parsed_json = json.loads(content)
+                    if isinstance(parsed_json, list) and len(parsed_json) > 0:
+                        parsed_json = parsed_json[0]
+                    return parsed_json
+                except json.JSONDecodeError as jde:
+                    logger.warning(f"Falha ao parsear JSON direto do Gemini, tentando extrair objeto: {jde}")
+                    if "```" in content:
+                        m = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
+                        if m:
+                            try:
+                                return json.loads(m.group(1).strip())
+                            except json.JSONDecodeError:
+                                pass
+                    first_brace = content.find('{')
+                    last_brace = content.rfind('}')
+                    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                        try:
+                            return json.loads(content[first_brace:last_brace+1])
+                        except json.JSONDecodeError:
+                            pass
+                    raise jde
+            else:
+                logger.error(f"Erro na API do Gemini: Status {resp.status_code} - {resp.text}")
+                raise httpx.HTTPStatusError(f"API do Gemini retornou {resp.status_code}", request=None, response=resp)
 
     def validate_action(self, chat_id: int, action: dict) -> tuple[bool, dict]:
         """
@@ -276,7 +352,7 @@ class JarvisOrchestrator:
             # Etapa 1: Confirmar o assunto do post
             m_topic = re.search(r"Confirma que o assunto do post é '([^']+)'\?", last_assistant_msg)
             if m_topic:
-                if self.security.has_user_confirmed([{"role": "user", "content": cleaned_input}]):
+                if self.security.has_user_confirmed(history + [{"role": "user", "content": cleaned_input}]):
                     topic = m_topic.group(1)
                     self.update_memory(chat_id, "user", cleaned_input)
                     
@@ -301,7 +377,7 @@ class JarvisOrchestrator:
 
             # Etapa 2: Confirmar o rascunho do post
             if "Deseja confirmar ou ajustar antes de finalizar?" in last_assistant_msg:
-                if self.security.has_user_confirmed([{"role": "user", "content": cleaned_input}]):
+                if self.security.has_user_confirmed(history + [{"role": "user", "content": cleaned_input}]):
                     self.update_memory(chat_id, "user", cleaned_input)
                     
                     # Extrair o rascunho
@@ -412,6 +488,29 @@ class JarvisOrchestrator:
                     return self.feedback_loop(action_type, err)
                 if not results:
                     return {"action": "chat", "response": f"Nenhum contato encontrado correspondente a '{query}'."}
+                
+                # Verificar se há intenção de envio associada (subject/body na ação ou na última msg)
+                subject = validated_action.get("subject", "")
+                body = validated_action.get("body", "")
+                
+                if len(results) == 1 and (subject or body):
+                    # Encontrou exatamente um contato e há contexto de e-mail: apresentar rascunho para aprovação
+                    resolved_email = results[0]["email"]
+                    contact_name = results[0]["name"]
+                    subject_display = subject or "(Sem assunto)"
+                    body_display = body or "(Sem corpo de mensagem)"
+                    return {
+                        "action": "chat",
+                        "response": (
+                            f"Olá, Claudemir! Encontrei o contato e preparei o e-mail abaixo:\n\n"
+                            f"**Para:** {contact_name} ({resolved_email})\n"
+                            f"**Assunto:** {subject_display}\n"
+                            f"**Mensagem:**\n{body_display}\n\n"
+                            f"Você confirma o envio?"
+                        )
+                    }
+                
+                # Caso padrão: listar contatos encontrados
                 lines = [f"• **{c['name']}**: {c['email']}" for c in results]
                 return {
                     "action": "chat",
@@ -592,6 +691,18 @@ class JarvisOrchestrator:
                 
                 # Retorna o resultado refinado finalizado
                 return final_result
+                
+            elif action_type == "weather":
+                location = validated_action.get("location", "Curitiba")
+                logger.info(f"Harness Weather: Consultando clima para '{location}'")
+                
+                # Executar consulta meteorológica
+                weather_report = await weather.get_weather(location)
+                
+                return {
+                    "action": "chat",
+                    "response": weather_report
+                }
                 
             else:
                 # Chat Geral / Outras Ações não mapeadas

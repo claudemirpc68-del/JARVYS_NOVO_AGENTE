@@ -253,7 +253,7 @@ async def main():
     print("==================================================")
 
     # Caminho absoluto correto para o artefato da conversa
-    checklist_path = Path(r"C:\Users\FAMÍLIA\.gemini\antigravity\brain\06b1c27c-81b6-4bf0-98c4-15bac522d58c\checklist_validacao.md")
+    checklist_path = Path(r"C:\Users\FAMÍLIA\.gemini\antigravity-ide\brain\d336a3bc-4854-43ae-b3d7-56a57c8f0ac7\checklist_validacao.md")
     
     if checklist_path.exists():
         content = checklist_path.read_text(encoding="utf-8")

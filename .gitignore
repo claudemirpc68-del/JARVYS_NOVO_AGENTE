@@ -20,4 +20,6 @@ flow_state.json
 *.db
 *.log
 logs/linkedin_topics.json
+chat_memories.json
+temp_audio/
 

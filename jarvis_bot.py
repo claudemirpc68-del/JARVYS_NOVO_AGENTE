@@ -14,6 +14,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from harness.orchestrator import JarvisOrchestrator
 from config import config
+import tools.audio_tool as audio
 
 # Configuração de logging básica para o bot
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -108,6 +109,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif action_type == "linkedin_article":
                 topic = action_data.get("topic", "")
                 await status_msg.edit_text(f"✍️ *Redigindo artigo técnico para o LinkedIn sobre '{topic}'...*", parse_mode="Markdown")
+            elif action_type == "weather":
+                location = action_data.get("location", "")
+                await status_msg.edit_text(f"🌤️ *Buscando a previsão do tempo para '{location}'...*", parse_mode="Markdown")
         except Exception as e:
             logger.warning(f"Erro ao editar mensagem de status do Telegram: {e}")
 
@@ -131,6 +135,142 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 6. Atualizar a memória do chat com a resposta final do JARVIS
     orchestrator.update_memory(chat_id, "assistant", response_text)
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    
+    # 1. Enviar feedback visual de progresso inicial
+    status_msg = await update.message.reply_text("🤖 *Recebendo áudio...*", parse_mode="Markdown")
+    
+    try:
+        # 2. Identificar se é nota de voz nativa ou arquivo de áudio
+        if update.message.voice:
+            audio_obj = update.message.voice
+            file_ext = "ogg"
+        elif update.message.audio:
+            audio_obj = update.message.audio
+            file_ext = "mp3"
+            if audio_obj.mime_type:
+                if "ogg" in audio_obj.mime_type or "opus" in audio_obj.mime_type:
+                    file_ext = "ogg"
+                elif "wav" in audio_obj.mime_type:
+                    file_ext = "wav"
+                elif "m4a" in audio_obj.mime_type:
+                    file_ext = "m4a"
+        else:
+            await status_msg.edit_text("⚠️ Tipo de arquivo de áudio não suportado.")
+            return
+
+        file_id = audio_obj.file_id
+        
+        temp_dir = Path("temp_audio")
+        temp_dir.mkdir(exist_ok=True)
+        
+        timestamp = int(datetime.now().timestamp())
+        ogg_path = temp_dir / f"voice_{chat_id}_{timestamp}.{file_ext}"
+        
+        # Baixar o arquivo de áudio
+        new_file = await context.bot.get_file(file_id)
+        await new_file.download_to_drive(str(ogg_path))
+        
+        await status_msg.edit_text("🤖 *Transcrevendo áudio...*", parse_mode="Markdown")
+        
+        # 3. Transcrever usando Groq Whisper
+        groq_key = config.api.groq_api_key or os.environ.get("GROQ_API_KEY", "")
+        transcribed_text = await audio.transcribe_audio(str(ogg_path), groq_key)
+        
+        if not transcribed_text:
+            await status_msg.edit_text("⚠️ Não consegui transcrever ou entender o áudio. Por favor, tente enviar novamente.")
+            if ogg_path.exists():
+                ogg_path.unlink()
+            return
+            
+        await status_msg.edit_text(
+            f"📝 *Transcrição:* \"{transcribed_text}\"\n\n"
+            f"🤖 *Processando resposta...*",
+            parse_mode="Markdown"
+        )
+        
+        # 4. Callback assíncrono para atualizar o status do progresso conforme a ação detectada pelo Harness
+        async def on_action_start(action_type, action_data):
+            try:
+                if action_type == "web_search":
+                    query = action_data.get("query", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n🔍 *Pesquisando na web por '{query}'...*", parse_mode="Markdown")
+                elif action_type == "send":
+                    to = action_data.get("to", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n📧 *Enviando e-mail para {to}...*", parse_mode="Markdown")
+                elif action_type == "list":
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n📧 *Buscando seus últimos e-mails...*", parse_mode="Markdown")
+                elif action_type == "contacts":
+                    query = action_data.get("query", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n👤 *Buscando contato '{query}'...*", parse_mode="Markdown")
+                elif action_type == "calendar_create":
+                    title = action_data.get("title", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n📅 *Agendando compromisso '{title}'...*", parse_mode="Markdown")
+                elif action_type == "calendar_list":
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n📅 *Buscando compromissos...*", parse_mode="Markdown")
+                elif action_type == "linkedin_post":
+                    topic = action_data.get("topic", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n✍️ *Gerando post para o LinkedIn sobre '{topic}'...*", parse_mode="Markdown")
+                elif action_type == "linkedin_article":
+                    topic = action_data.get("topic", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n✍️ *Redigindo artigo para o LinkedIn sobre '{topic}'...*", parse_mode="Markdown")
+                elif action_type == "weather":
+                    location = action_data.get("location", "")
+                    await status_msg.edit_text(f"📝 *Transcrição:* \"{transcribed_text}\"\n\n🌤️ *Buscando a previsão do tempo para '{location}'...*", parse_mode="Markdown")
+            except Exception as err:
+                logger.warning(f"Erro ao editar status da voz: {err}")
+
+        # 5. Processar mensagem na camada de orquestração do Harness
+        result = await orchestrator.process(chat_id, transcribed_text, on_action_start=on_action_start)
+        response_text = result.get("response", "Desculpe, não consegui processar a resposta.")
+        
+        await status_msg.edit_text(
+            f"📝 *Transcrição:* \"{transcribed_text}\"\n\n"
+            f"🤖 *Gerando áudio de resposta...*",
+            parse_mode="Markdown"
+        )
+        
+        # 6. Gerar áudio a partir da resposta usando Edge TTS
+        mp3_path = temp_dir / f"reply_{chat_id}_{timestamp}.mp3"
+        clean_text = response_text.replace("*", "").replace("_", "").replace("`", "").replace("#", "")
+        
+        await audio.text_to_speech(clean_text, str(mp3_path))
+        
+        # 7. Remover mensagem de progresso temporária
+        try:
+            await status_msg.delete()
+        except Exception as err:
+            logger.warning(f"Erro ao deletar mensagem de status do Telegram: {err}")
+            
+        # 8. Enviar resposta em nota de voz com a transcrição do texto no caption
+        with open(mp3_path, "rb") as voice_file:
+            await update.message.reply_voice(
+                voice=voice_file,
+                caption=f"📝 *Resposta do JARVIS:*\n\n{response_text}"[:1024],
+                parse_mode="Markdown"
+            )
+            
+        # Se o texto for maior que o limite de legenda, enviar em mensagem de texto
+        if len(response_text) > 950:
+            await update.message.reply_text(response_text, parse_mode="Markdown")
+            
+        # 9. Atualizar memória
+        orchestrator.update_memory(chat_id, "assistant", response_text)
+        
+        # 10. Limpar arquivos temporários do disco
+        if ogg_path.exists():
+            ogg_path.unlink()
+        if mp3_path.exists():
+            mp3_path.unlink()
+            
+    except Exception as e:
+        logger.error(f"Erro no processamento de mensagem de voz: {e}")
+        try:
+            await status_msg.edit_text("❌ Ocorreu um erro ao processar sua nota de voz. Por favor, tente novamente.")
+        except Exception:
+            await update.message.reply_text("❌ Ocorreu um erro ao processar sua nota de voz. Por favor, tente novamente.")
+
 def main():
     telegram_token = config.api.telegram_token or os.environ.get("TELEGRAM_TOKEN", "")
     groq_key = config.api.groq_api_key or os.environ.get("GROQ_API_KEY", "")
@@ -151,8 +291,9 @@ def main():
     app.add_handler(CommandHandler("email", email_cmd))
     app.add_handler(CommandHandler("ajuda", ajuda))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     
-    print("Bot do Telegram rodando e pronto para receber mensagens!")
+    print("Bot do Telegram rodando e pronto para receber mensagens, notas de voz e arquivos de áudio!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
