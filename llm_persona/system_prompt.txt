@@ -35,7 +35,7 @@ REGRAS DE PESQUISA WEB (INTERNET):
 2. Formule uma query de pesquisa clara e objetiva para o campo "query".
 
 REGRAS DE CRIAÇÃO DE CONTEÚDO (LINKEDIN):
-1. Use a ação "linkedin_post" se o usuário quiser criar posts curtos, informais, inspiradores e virais para o LinkedIn (focado em logística ou temas gerais).
+1. Use a ação "linkedin_post" se o usuário quiser criar posts curtos, dinâmicos e virais para o LinkedIn nas áreas de TI, Logística e IA (focado na perspectiva de quem está iniciando a jornada no mundo da TI).
 2. Use a ação "linkedin_article" se o usuário quiser criar artigos técnicos, longos e estruturados para o LinkedIn (focado em TI, programação, arquitetura de software).
 3. O parâmetro "topic" deve conter o tema solicitado pelo usuário.
 

@@ -101,7 +101,8 @@ class JarvisOrchestrator:
                 payload = {
                     "model": model,
                     "messages": messages,
-                    "temperature": 0.7
+                    "temperature": 0.7,
+                    "max_tokens": 2048
                 }
                 if force_json:
                     payload["response_format"] = {"type": "json_object"}
@@ -124,19 +125,28 @@ class JarvisOrchestrator:
                     try:
                         parsed_json = json.loads(content)
                     except json.JSONDecodeError as jde:
-                        # Se falhar, tentar extrair bloco markdown de JSON caso esteja envelopado na raiz
-                        logger.warning(f"Falha ao parsear JSON direto, tentando extrair bloco markdown: {jde}")
+                        logger.warning(f"Falha ao parsear JSON direto, tentando extrair bloco markdown ou objeto: {jde}")
+                        # 1. Tentar extrair de blocos de código markdown (```json ... ```)
                         if "```" in content:
                             m = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
                             if m:
                                 try:
-                                    parsed_json = json.loads(m.group(1))
+                                    parsed_json = json.loads(m.group(1).strip())
+                                    return parsed_json
                                 except json.JSONDecodeError:
-                                    raise jde
-                            else:
-                                raise jde
-                        else:
-                            raise jde
+                                    pass
+                        
+                        # 2. Tentar encontrar o primeiro '{' e o último '}' para isolar o objeto JSON
+                        first_brace = content.find('{')
+                        last_brace = content.rfind('}')
+                        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                            try:
+                                parsed_json = json.loads(content[first_brace:last_brace+1])
+                                return parsed_json
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        raise jde
                         
                     # Desembrulhar lista de um único item gerada por alguns modelos (OpenRouter Llama 3.3)
                     if isinstance(parsed_json, list) and len(parsed_json) > 0:
@@ -235,6 +245,98 @@ class JarvisOrchestrator:
                 "action": "chat",
                 "response": "⚠️ Não posso processar mensagens contendo esse tipo de conteúdo ou instruções perigosas."
             }
+
+        # Interceptor da Skill LinkedIn Post Expert Interativa (Máquina de Estados)
+        history = self.memory.get_history(chat_id)
+        last_assistant_msg = None
+        for msg in reversed(history):
+            if msg["role"] == "assistant":
+                last_assistant_msg = msg["content"]
+                break
+
+        if last_assistant_msg:
+            # Etapa 1: Confirmar o assunto do post
+            m_topic = re.search(r"Confirma que o assunto do post é '([^']+)'\?", last_assistant_msg)
+            if m_topic:
+                if self.security.has_user_confirmed([{"role": "user", "content": cleaned_input}]):
+                    topic = m_topic.group(1)
+                    self.update_memory(chat_id, "user", cleaned_input)
+                    
+                    if on_action_start:
+                        await on_action_start("linkedin_post", {"topic": topic})
+                        
+                    prompt = linkedin.VIRAL_POST_TEMPLATE.format(topic=topic)
+                    draft_result = await self.classify_intent(chat_id, prompt, save_to_history=False, ignore_history=True, force_json=False)
+                    draft_text = draft_result if isinstance(draft_result, str) else draft_result.get("response", str(draft_result))
+                    
+                    response_text = f"Aqui está um rascunho do post:\n\n{draft_text}\n\nDeseja confirmar ou ajustar antes de finalizar?"
+                    return {
+                        "action": "chat",
+                        "response": response_text
+                    }
+                elif "não" in cleaned_input.lower() or "nao" in cleaned_input.lower() or "cancelar" in cleaned_input.lower():
+                    self.update_memory(chat_id, "user", cleaned_input)
+                    return {
+                        "action": "chat",
+                        "response": "Entendido, Claudemir. Cancelei a criação do post. O que gostaria de fazer agora?"
+                    }
+
+            # Etapa 2: Confirmar o rascunho do post
+            if "Deseja confirmar ou ajustar antes de finalizar?" in last_assistant_msg:
+                if self.security.has_user_confirmed([{"role": "user", "content": cleaned_input}]):
+                    self.update_memory(chat_id, "user", cleaned_input)
+                    
+                    # Extrair o rascunho
+                    draft_start = last_assistant_msg.find("Aqui está um rascunho do post:\n\n")
+                    draft_end = last_assistant_msg.find("\n\nDeseja confirmar ou ajustar antes de finalizar?")
+                    
+                    if draft_start != -1 and draft_end != -1:
+                        draft_start += len("Aqui está um rascunho do post:\n\n")
+                        draft_text = last_assistant_msg[draft_start:draft_end].strip()
+                    else:
+                        draft_text = last_assistant_msg
+                    
+                    # Encontrar o assunto no histórico anterior para saber quais hashtags usar
+                    topic = "TI"
+                    for msg in reversed(history):
+                        if msg["role"] == "assistant" and "Confirma que o assunto do post é" in msg["content"]:
+                            m = re.search(r"Confirma que o assunto do post é '([^']+)'\?", msg["content"])
+                            if m:
+                                topic = m.group(1)
+                                break
+                    
+                    # Gerar as hashtags
+                    tags = ["#TI", "#CarreiraEmTI"]
+                    topic_lower = topic.lower()
+                    if "logis" in topic_lower or "logís" in topic_lower or "logist" in topic_lower:
+                        tags.append("#Logística")
+                    if "ia" in topic_lower or "intelig" in topic_lower or "artificial" in topic_lower:
+                        tags.append("#InteligênciaArtificial")
+                        
+                    ordered_tags = []
+                    if "#Logística" in tags:
+                        ordered_tags.append("#Logística")
+                    if "#InteligênciaArtificial" in tags:
+                        ordered_tags.append("#InteligênciaArtificial")
+                    ordered_tags.append("#TI")
+                    ordered_tags.append("#CarreiraEmTI")
+                    
+                    tags_str = " ".join(ordered_tags)
+                    final_post = f"{draft_text}\n\n{tags_str}"
+                    
+                    # Salvar tópico no histórico do LinkedIn
+                    linkedin.save_topic(topic)
+                    
+                    return {
+                        "action": "chat",
+                        "response": final_post
+                    }
+                elif "não" in cleaned_input.lower() or "nao" in cleaned_input.lower() or "cancelar" in cleaned_input.lower():
+                    self.update_memory(chat_id, "user", cleaned_input)
+                    return {
+                        "action": "chat",
+                        "response": "Sem problemas, Claudemir. Cancelei a criação do post. Se quiser ajustar, me diga o que mudar."
+                    }
 
         # 4. Classificar Intenção via Groq (Salva no histórico de conversação)
         result = await self.classify_intent(chat_id, cleaned_input, save_to_history=True)
@@ -336,9 +438,16 @@ class JarvisOrchestrator:
                     "response": "📅 **Seus compromissos:**\n\n" + "\n".join(lines)
                 }
                 
-            elif action_type in ["linkedin_post", "linkedin_article"]:
+            elif action_type == "linkedin_post":
                 topic = validated_action.get("topic", "")
-                style = "post" if action_type == "linkedin_post" else "article"
+                return {
+                    "action": "chat",
+                    "response": f"Confirma que o assunto do post é '{topic}'?"
+                }
+                
+            elif action_type == "linkedin_article":
+                topic = validated_action.get("topic", "")
+                style = "article"
                 
                 logger.info(f"Harness LinkedIn: Gerando conteúdo do tipo '{style}' para o tema '{topic}'")
                 
@@ -346,10 +455,7 @@ class JarvisOrchestrator:
                 is_dup, alert_msg = linkedin.is_topic_duplicate(topic)
                 
                 # 2. Selecionar o template de prompt
-                if style == "post":
-                    prompt = linkedin.VIRAL_POST_TEMPLATE.format(topic=topic)
-                else:
-                    prompt = linkedin.TECHNICAL_ARTICLE_TEMPLATE.format(topic=topic)
+                prompt = linkedin.TECHNICAL_ARTICLE_TEMPLATE.format(topic=topic)
                     
                 if is_dup:
                     prompt += "\n\nNOTA DE EVITAR DUPLICIDADE: Você já gerou um post/artigo sobre este tema. Crie um conteúdo sob uma perspectiva completamente diferente para não ser repetitivo!"

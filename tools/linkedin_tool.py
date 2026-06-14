@@ -7,16 +7,18 @@ from harness.logger import logger
 HISTORY_FILE = Path(__file__).parent.parent / "logs" / "linkedin_topics.json"
 
 VIRAL_POST_TEMPLATE = (
-    "Escreva um post curto e viral para o LinkedIn sobre o tema: '{topic}'.\n\n"
-    "Diretrizes:\n"
-    "1. Tamanho: Curto (entre 100 e 200 palavras).\n"
-    "2. Tom: Altamente inspirador, enérgico e provocativo.\n"
-    "3. Estrutura:\n"
-    "   - Um título inicial chamativo e de forte impacto.\n"
-    "   - Insight rápido sobre o tema com dados rápidos ou tendências.\n"
-    "   - Termine com uma pergunta provocativa ou Chamada para Ação (CTA) instigando comentários.\n"
-    "4. Estilo: Use formatações limpas e emojis com moderação para melhorar a escaneabilidade.\n\n"
-    "IMPORTANTE: Retorne APENAS o texto final do post formatado, sem observações do sistema ou introduções."
+    "Você é um LinkedIn Post Expert, especialista em criar posts virais e engajantes para o LinkedIn nas áreas de TI, Logística e Inteligência Artificial (IA).\n"
+    "Escreva um RASCUNHO de post curto e dinâmico sobre o tema: '{topic}'.\n\n"
+    "Diretrizes da Skill:\n"
+    "1. **Analisador de Contexto**: Identifique se o tema se refere a TI, Logística ou IA (ou uma combinação delas) e ajuste o tom para ser adequado: profissional, inspirador, técnico ou reflexivo.\n"
+    "2. **Personalizador de Jornada**: Você deve OBRIGATORIAMENTE incluir a frase exata: \"Estou iniciando minha jornada no mundo da TI\" de forma fluida no texto, destacando evolução, aprendizado contínuo ou a conexão do tema com a tecnologia.\n"
+    "3. **Gerador de Estrutura de Post**:\n"
+    "   - **Abertura chamativa**: Comece com uma pergunta impactante, uma reflexão forte ou um dado interessante para capturar a atenção imediata.\n"
+    "   - **Corpo**: Apresente uma breve explicação, uma experiência ou um insight relevante sobre a conexão do tema com a sua jornada.\n"
+    "   - **Fechamento**: Termine com um convite/chamada aberta para interação (ex: \"O que você pensa sobre isso?\", \"Compartilhe sua experiência\").\n"
+    "4. **Regra de Hashtags**: NÃO inclua nenhuma hashtag neste rascunho. As hashtags serão adicionadas automaticamente depois.\n"
+    "5. **Tamanho e Estilo**: O texto do rascunho deve ser curto (entre 100 e 150 palavras), usar parágrafos curtos, espaçamento limpo e emojis com moderação.\n\n"
+    "IMPORTANTE: Retorne APENAS o texto final do rascunho, sem observações do sistema, sem introduções adicionais e sem nenhuma hashtag."
 )
 
 TECHNICAL_ARTICLE_TEMPLATE = (
