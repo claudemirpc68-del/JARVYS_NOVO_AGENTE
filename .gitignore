@@ -22,4 +22,5 @@ flow_state.json
 logs/linkedin_topics.json
 chat_memories.json
 temp_audio/
+temp_images/
 

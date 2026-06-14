@@ -17,6 +17,7 @@ import tools.calendar_tool as calendar
 import tools.tavily_tool as tavily
 import tools.linkedin_tool as linkedin
 import tools.weather_tool as weather
+import tools.image_tool as image
 
 class JarvisOrchestrator:
     def __init__(self):
@@ -702,6 +703,22 @@ class JarvisOrchestrator:
                 return {
                     "action": "chat",
                     "response": weather_report
+                }
+                
+            elif action_type == "image_generate":
+                prompt = validated_action.get("prompt", "")
+                logger.info(f"Harness Image: Gerando imagem para prompt '{prompt[:80]}'")
+                
+                # Gerar imagem via Pollinations.ai
+                image_path, err = await image.generate_image(prompt, chat_id=chat_id)
+                
+                if err:
+                    return self.feedback_loop(action_type, err)
+                
+                return {
+                    "action": "chat",
+                    "response": f"\U0001f3a8 Aqui está a imagem gerada para: *{prompt}*",
+                    "image_path": image_path
                 }
                 
             else:

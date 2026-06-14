@@ -112,6 +112,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif action_type == "weather":
                 location = action_data.get("location", "")
                 await status_msg.edit_text(f"🌤️ *Buscando a previsão do tempo para '{location}'...*", parse_mode="Markdown")
+            elif action_type == "image_generate":
+                prompt = action_data.get("prompt", "")
+                await status_msg.edit_text(f"🎨 *Gerando imagem: '{prompt[:60]}'...*\n_(isso pode levar alguns segundos)_", parse_mode="Markdown")
         except Exception as e:
             logger.warning(f"Erro ao editar mensagem de status do Telegram: {e}")
 
@@ -126,11 +129,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Erro ao deletar mensagem de status do Telegram: {e}")
         
     # 5. Enviar a resposta final para o usuário
-    try:
-        await update.message.reply_text(response_text, parse_mode="Markdown")
-    except Exception as e:
-        logger.warning(f"Erro de parser Markdown no Telegram. Enviando texto puro. Detalhe: {e}")
-        await update.message.reply_text(response_text)
+    image_path = result.get("image_path")
+    
+    if image_path and Path(image_path).exists():
+        # Enviar como foto no Telegram
+        try:
+            with open(image_path, "rb") as photo_file:
+                await update.message.reply_photo(
+                    photo=photo_file,
+                    caption=response_text[:1024],
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            logger.warning(f"Erro de Markdown ao enviar foto. Tentando sem formatação: {e}")
+            with open(image_path, "rb") as photo_file:
+                await update.message.reply_photo(
+                    photo=photo_file,
+                    caption=response_text[:1024],
+                    parse_mode=None
+                )
+        finally:
+            # Limpar arquivo temporário
+            try:
+                Path(image_path).unlink()
+            except Exception:
+                pass
+    else:
+        # Resposta de texto padrão
+        try:
+            await update.message.reply_text(response_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Erro de parser Markdown no Telegram. Enviando texto puro. Detalhe: {e}")
+            await update.message.reply_text(response_text)
         
     # 6. Atualizar a memória do chat com a resposta final do JARVIS
     orchestrator.update_memory(chat_id, "assistant", response_text)

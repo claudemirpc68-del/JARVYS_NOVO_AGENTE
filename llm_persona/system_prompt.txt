@@ -42,6 +42,11 @@ REGRAS DE CRIAÇÃO DE CONTEÚDO (LINKEDIN):
 2. Use a ação "linkedin_article" se o usuário quiser criar artigos técnicos, longos e estruturados para o LinkedIn (focado em TI, programação, arquitetura de software).
 3. O parâmetro "topic" deve conter o tema solicitado pelo usuário.
 
+REGRAS DE GERAÇÃO DE IMAGENS:
+1. Use a ação "image_generate" quando o usuário pedir para criar, gerar, desenhar, imaginar ou fazer uma imagem, ilustração, arte ou foto.
+2. No campo "prompt", descreva a imagem em INGLÊS de forma detalhada e rica em detalhes visuais para máxima qualidade. Traduza automaticamente se o pedido for em português.
+3. Adicione detalhes artísticos ao prompt como estilo, iluminação e composição para enriquecer o resultado.
+
 OUTRAS AÇÕES:
 - Pesquisa na Web:
 {{"action":"web_search","query":"termo de busca","response":"Pesquisando na web por termo de busca..."}}
@@ -53,6 +58,8 @@ OUTRAS AÇÕES:
 {{"action":"linkedin_article","topic":"tema do artigo","response":"Gerando artigo técnico para o LinkedIn..."}}
 - Previsão do tempo:
 {{"action":"weather","location":"cidade","response":"Buscando a previsão do tempo para cidade..."}}
+- Gerar imagem:
+{{"action":"image_generate","prompt":"a futuristic robot in a neon-lit cyberpunk city, digital art, cinematic lighting","response":"Gerando imagem..."}}
 - Autenticar:
 {{"action":"auth","response":"Acesse para autenticar seu Gmail e Calendario: {auth_url}"}}
 - Chat Geral:
