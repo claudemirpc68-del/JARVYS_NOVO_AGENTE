@@ -723,6 +723,25 @@ class JarvisOrchestrator:
                 
             else:
                 # Chat Geral / Outras Ações não mapeadas
+                # Tratamento robusto para concatenar chaves adicionais geradas pela LLM na resposta final
+                response_text = validated_action.get("response", "")
+                extra_parts = []
+                for key, val in validated_action.items():
+                    if key in ["action", "response", "image_path"]:
+                        continue
+                    if isinstance(val, list):
+                        formatted_list = "\n".join([f"• {item}" for item in val])
+                        extra_parts.append(formatted_list)
+                    elif isinstance(val, dict):
+                        formatted_dict = "\n".join([f"• **{k}**: {v}" for k, v in val.items()])
+                        extra_parts.append(formatted_dict)
+                    elif val:
+                        extra_parts.append(str(val))
+                
+                if extra_parts:
+                    response_text += "\n\n" + "\n\n".join(extra_parts)
+                    validated_action["response"] = response_text
+                    
                 return validated_action
                 
         except Exception as e:
