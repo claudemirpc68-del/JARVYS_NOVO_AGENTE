@@ -131,6 +131,9 @@ async def process_email_command(request: EmailRequest):
     """Processar comando de email via API"""
     try:
         result = await orchestrator.process(int(request.user_id), request.query)
+        response_text = result.get("response", "")
+        if response_text:
+            orchestrator.update_memory(int(request.user_id), "assistant", response_text)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error(f"Erro no process_email_command: {e}")
@@ -141,6 +144,9 @@ async def process_telegram_command(request: TelegramCommand):
     """Processar comando via Telegram API"""
     try:
         result = await orchestrator.process(int(request.chat_id), request.text)
+        response_text = result.get("response", "")
+        if response_text:
+            orchestrator.update_memory(int(request.chat_id), "assistant", response_text)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error(f"Erro no process_telegram_command: {e}")
