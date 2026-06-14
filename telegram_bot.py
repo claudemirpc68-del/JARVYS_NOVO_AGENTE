@@ -252,12 +252,21 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Erro ao deletar mensagem de status do Telegram: {err}")
             
         # 8. Enviar resposta em nota de voz com a transcrição do texto no caption
-        with open(mp3_path, "rb") as voice_file:
-            await update.message.reply_voice(
-                voice=voice_file,
-                caption=f"📝 *Resposta do JARVIS:*\n\n{response_text}"[:1024],
-                parse_mode="Markdown"
-            )
+        try:
+            with open(mp3_path, "rb") as voice_file:
+                await update.message.reply_voice(
+                    voice=voice_file,
+                    caption=f"📝 *Resposta do JARVIS:*\n\n{response_text}"[:1024],
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            logger.warning(f"Erro de parser Markdown ao enviar nota de voz. Tentando texto puro. Detalhe: {e}")
+            with open(mp3_path, "rb") as voice_file:
+                await update.message.reply_voice(
+                    voice=voice_file,
+                    caption=f"📝 Resposta do JARVIS:\n\n{response_text}"[:1024],
+                    parse_mode=None
+                )
             
         # Se o texto for maior que o limite de legenda, enviar em mensagem de texto
         if len(response_text) > 950:
