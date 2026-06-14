@@ -74,11 +74,11 @@ async def main():
                     resp = await client.get(url, headers=headers, timeout=15.0)
                 
                 if resp.status_code in [200, 201, 202]:
-                    print(f"✅ SUCESSO: Deploy disparado! Resposta ({resp.status_code}): {resp.text}")
+                    print(f"[OK] SUCESSO: Deploy disparado! Resposta ({resp.status_code}): {resp.text}")
                     success = True
                     break
                 else:
-                    print(f"❌ Falha no endpoint: Status {resp.status_code} - {resp.text}")
+                    print(f"[FALHA] Falha no endpoint: Status {resp.status_code} - {resp.text}")
             except Exception as e:
                 print(f"Erro no endpoint: {e}")
                 
