@@ -123,7 +123,7 @@ class JarvisOrchestrator:
                         "Content-Type": "application/json"
                     }
                     fallback_payload = payload.copy()
-                    fallback_payload["model"] = "llama-3.3-70b-versatile"
+                    fallback_payload["model"] = "llama-3.1-8b-instant"
                     
                     resp = await client.post(
                         fallback_url,
