@@ -114,6 +114,24 @@ class JarvisOrchestrator:
                     timeout=30
                 )
                 
+                # Fallback automático do OpenRouter para o Groq em caso de erros de cota/limite (402 ou 429)
+                if self.openrouter_api_key and resp.status_code in [402, 429]:
+                    logger.warning(f"OpenRouter retornou erro {resp.status_code}. Tentando fallback automático para o Groq API...")
+                    fallback_url = "https://api.groq.com/openai/v1/chat/completions"
+                    fallback_headers = {
+                        "Authorization": f"Bearer {self.groq_api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    fallback_payload = payload.copy()
+                    fallback_payload["model"] = "llama-3.3-70b-versatile"
+                    
+                    resp = await client.post(
+                        fallback_url,
+                        headers=fallback_headers,
+                        json=fallback_payload,
+                        timeout=30
+                    )
+                
                 if resp.status_code == 200:
                     content = resp.json()["choices"][0]["message"]["content"]
                     logger.debug(f"Retorno bruto do Groq: {content}")
