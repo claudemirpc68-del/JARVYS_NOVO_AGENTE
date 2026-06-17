@@ -1,5 +1,6 @@
 import base64
 from pathlib import Path
+from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -39,7 +40,7 @@ def get_gmail_service():
 
 def send_email(to: str, subject: str, body: str) -> tuple[str | None, str | None]:
     """
-    Envia um e-mail em HTML usando a API do Gmail.
+    Envia um e-mail em HTML usando a API do Gmail com cabeçalhos estruturados em UTF-8 (MIMEText).
     Retorna (message_id, error_message).
     """
     service = get_gmail_service()
@@ -47,9 +48,14 @@ def send_email(to: str, subject: str, body: str) -> tuple[str | None, str | None
         return None, "Gmail não autenticado. Favor autenticar."
 
     try:
-        # Nota: A assinatura é adicionada programaticamente no bot
-        msg = f"From: me\nTo: {to}\nSubject: {subject}\nContent-Type: text/html; charset=UTF-8\n\n{body}"
-        raw = base64.urlsafe_b64encode(msg.encode()).decode()
+        # Criar a mensagem estruturada usando MIMEText para evitar mojibake em caracteres acentuados
+        message = MIMEText(body, 'html', 'utf-8')
+        message['to'] = to
+        message['from'] = 'me'
+        message['subject'] = subject
+        
+        # Obter os bytes formatados em UTF-8 e codificar em base64 urlsafe
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
         
         logger.info(f"Enviando e-mail para '{to}' com assunto '{subject}'")
         result = service.users().messages().send(userId="me", body={"raw": raw}).execute()
