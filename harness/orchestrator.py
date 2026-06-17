@@ -42,10 +42,15 @@ class JarvisOrchestrator:
         """Interface para gerenciar e persistir o histórico de conversação do chat"""
         self.memory.add_message(chat_id, role, content)
 
-    async def classify_intent(self, chat_id: int, text: str, save_to_history: bool = True, ignore_history: bool = False, force_json: bool = True) -> dict | str:
+    async def classify_intent(self, chat_id: int, text: str, save_to_history: bool = True, ignore_history: bool = False, force_json: bool = True, extra_context: list = None) -> dict | str:
         """
         Classifica a intenção do usuário chamando o Groq API em formato JSON estruturado.
         Substitui dinamicamente as variáveis de prompt (data/hora e URL de auth).
+        
+        Args:
+            extra_context: Lista opcional de mensagens temporárias ({role, content}) que são
+                           injetadas no payload da API sem serem salvas no histórico permanente.
+                           Usado para resultados de web_search, LinkedIn, etc.
         """
         # Dia da semana e fuso horário
         weekdays = ["segunda-feira", "terca-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sabado", "domingo"]
@@ -68,12 +73,28 @@ class JarvisOrchestrator:
             
         history = [] if ignore_history else self.memory.get_history(chat_id)
         
+        # Montar a lista de mensagens para a API
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Injetar resumo de contexto anterior (se existir)
+        context_summary = self.memory.get_context_summary(chat_id)
+        if context_summary and not ignore_history:
+            messages.append({
+                "role": "system",
+                "content": f"[RESUMO DO CONTEXTO ANTERIOR DA CONVERSA]\n{context_summary}"
+            })
+        
+        # Adicionar histórico de mensagens recentes
+        messages += history
+        
+        # Injetar contexto temporário (web_search, etc.) sem salvar no histórico
+        if extra_context:
+            messages += extra_context
+        
         # Se save_to_history for False (ex: chamada recursiva da busca web),
         # incluímos a query de instrução temporariamente no payload enviado à API do Groq
-        if save_to_history:
-            messages = [{"role": "system", "content": system_prompt}] + history
-        else:
-            messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": text}]
+        if not save_to_history:
+            messages.append({"role": "user", "content": text})
             
         # Definir a cadeia de provedores a tentar
         attempts = []
@@ -318,6 +339,58 @@ class JarvisOrchestrator:
             "response": f"Desculpe, Claudemir. Encontrei um problema ao tentar executar essa tarefa no meu sistema. (Detalhe: {err_msg})"
         }
 
+    async def _summarize_and_prune(self, chat_id: int) -> None:
+        """
+        Verifica se o histórico excedeu o limite. Se sim, resume as mensagens
+        que serão descartadas usando um modelo leve e acumula o resumo.
+        """
+        overflow = self.memory.get_overflow_messages(chat_id)
+        if not overflow:
+            return
+        
+        logger.info(f"Histórico do chat {chat_id} excedeu o limite ({len(self.memory.get_history(chat_id))} msgs). Gerando resumo de {len(overflow)} mensagens antigas...")
+        
+        existing_summary = self.memory.get_context_summary(chat_id)
+        
+        # Formatar as mensagens para o resumo
+        overflow_text = "\n".join([f"{m['role'].upper()}: {m['content'][:300]}" for m in overflow])
+        
+        summarize_prompt = (
+            "Resuma de forma concisa (máximo 200 palavras, em português do Brasil) "
+            "o seguinte trecho de diálogo, mantendo os pontos-chave, decisões tomadas, "
+            "nomes mencionados, tarefas solicitadas e informações importantes que o "
+            "usuário pode referenciar no futuro.\n\n"
+        )
+        
+        if existing_summary:
+            summarize_prompt += f"Contexto acumulado anterior:\n{existing_summary}\n\n"
+        
+        summarize_prompt += f"Novas mensagens a resumir:\n{overflow_text}"
+        
+        try:
+            new_summary = await self.classify_intent(
+                chat_id, summarize_prompt,
+                save_to_history=False,
+                ignore_history=True,
+                force_json=False
+            )
+            
+            # Se retornou dict (JSON), extrair o texto
+            if isinstance(new_summary, dict):
+                new_summary = new_summary.get("response", "") or str(new_summary)
+            
+            if new_summary and len(new_summary.strip()) > 20:
+                self.memory.set_context_summary(chat_id, new_summary.strip())
+                logger.info(f"Resumo de contexto gerado com sucesso para chat {chat_id}.")
+            else:
+                logger.warning(f"Resumo gerado muito curto ou vazio para chat {chat_id}. Mantendo resumo anterior.")
+                
+        except Exception as e:
+            logger.error(f"Erro ao gerar resumo de contexto para chat {chat_id}: {e}. Prosseguindo sem resumo.")
+        
+        # Podar as mensagens antigas (com ou sem sucesso no resumo)
+        self.memory.prune_history(chat_id)
+
     async def process(self, chat_id: int, user_input: str, on_action_start=None) -> dict:
         """
         Ponto de entrada central do Harness.
@@ -340,6 +413,9 @@ class JarvisOrchestrator:
                 "action": "chat",
                 "response": "⚠️ Não posso processar mensagens contendo esse tipo de conteúdo ou instruções perigosas."
             }
+        
+        # 3.5. Verificar se o histórico precisa de resumo e poda
+        await self._summarize_and_prune(chat_id)
 
         # Interceptor da Skill LinkedIn Post Expert Interativa (Máquina de Estados)
         history = self.memory.get_history(chat_id)
@@ -579,6 +655,7 @@ class JarvisOrchestrator:
                     prompt += "\n\nNOTA DE EVITAR DUPLICIDADE: Você já gerou um post/artigo sobre este tema. Crie um conteúdo sob uma perspectiva completamente diferente para não ser repetitivo!"
                 
                 # 3. Chamar a LLM (Groq) sem salvar esta instrução de escrita no histórico de conversação
+                # Usa ignore_history=True para não poluir o contexto com o prompt de geração
                 final_result = await self.classify_intent(chat_id, prompt, save_to_history=False, ignore_history=True, force_json=False)
                 generated_content = ""
                 
@@ -631,17 +708,12 @@ class JarvisOrchestrator:
                 is_valid, size, limit = linkedin.validate_content(generated_content, style)
                 if not is_valid:
                     logger.warning(f"Conteúdo do LinkedIn gerado ({size} chars) excede o limite ({limit} chars). Solicitando re-escrita curta...")
-                    # Feedback loop autônomo para encurtar o texto
+                    # Feedback loop autônomo para encurtar o texto — usa extra_context isolado
                     shorten_instruction = f"Seu texto anterior excedeu o limite de caracteres do LinkedIn (tamanho atual: {size}, limite: {limit}). Por favor, reescreva-o de forma mais objetiva e concisa, sem perder a qualidade, garantindo que fique com menos de {limit} caracteres."
-                    self.update_memory(chat_id, "system", f"[SISTEMA: Rascunho anterior de tamanho inválido]\n\n{generated_content}")
+                    draft_ctx = [{"role": "system", "content": f"[SISTEMA: Rascunho anterior de tamanho inválido]\n\n{generated_content}"}]
                     
-                    final_result = await self.classify_intent(chat_id, shorten_instruction, save_to_history=False, force_json=False)
+                    final_result = await self.classify_intent(chat_id, shorten_instruction, save_to_history=False, force_json=False, extra_context=draft_ctx)
                     generated_content = final_result if isinstance(final_result, str) else final_result.get("response", generated_content)
-                    
-                    # Remover rascunho inválido da memória
-                    history = self.memory.get_history(chat_id)
-                    if history and history[-1]["role"] == "system":
-                        history.pop()
                 
                 # 5. Salvar o tópico no histórico persistente do LinkedIn
                 linkedin.save_topic(topic)
@@ -664,13 +736,13 @@ class JarvisOrchestrator:
                 # Executar busca web
                 search_results = tavily.search_web_tavily(search_query)
                 
-                # Inserir os resultados temporariamente na memória como mensagem do sistema
+                # Criar contexto temporário ISOLADO (não entra na memória principal)
                 temp_context = f"[SISTEMA: Resultados da pesquisa na internet para '{search_query}']\n\n{search_results}"
-                self.update_memory(chat_id, "system", temp_context)
+                extra_ctx = [{"role": "system", "content": temp_context}]
                 
-                # Chamar novamente o Groq (IA) com save_to_history=False para obter o resumo/resposta final
+                # Chamar novamente o Groq (IA) passando o contexto temporário via extra_context
                 instruction = f"Por favor, formule a resposta final para a pergunta original ('{cleaned_input}') utilizando as informações da internet acima."
-                final_result = await self.classify_intent(chat_id, instruction, save_to_history=False, force_json=False)
+                final_result = await self.classify_intent(chat_id, instruction, save_to_history=False, force_json=False, extra_context=extra_ctx)
                 if isinstance(final_result, str):
                     try:
                         # Limpar espaços em branco e tentar decodificar JSON
@@ -684,13 +756,7 @@ class JarvisOrchestrator:
                     except Exception:
                         final_result = {"action": "chat", "response": final_result}
                 
-                # Remover o contexto temporário do histórico
-                history = self.memory.get_history(chat_id)
-                if history and history[-1]["role"] == "system":
-                    history.pop()
-                    logger.debug("Removido o contexto temporário do histórico de mensagens.")
-                
-                # Retorna o resultado refinado finalizado
+                # Retorna o resultado refinado finalizado (sem poluir o histórico)
                 return final_result
                 
             elif action_type == "weather":
