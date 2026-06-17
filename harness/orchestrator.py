@@ -558,6 +558,35 @@ class JarvisOrchestrator:
                     "response": "📧 **Seus últimos e-mails:**\n\n" + "\n---\n".join(emails)[:4000]
                 }
                 
+            elif action_type == "delete":
+                message_id = validated_action.get("message_id", "").strip()
+                if not message_id:
+                    return {"action": "chat", "response": "Por favor, informe o ID do e-mail que deseja excluir."}
+                
+                success, err = gmail.trash_email(message_id)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                return {
+                    "action": "chat",
+                    "response": f"🗑️ E-mail com ID `{message_id}` foi movido para a lixeira com sucesso!"
+                }
+                
+            elif action_type == "search":
+                query = validated_action.get("query", "")
+                limit = validated_action.get("limit", 5)
+                if not query:
+                    return {"action": "chat", "response": "O que você gostaria de pesquisar nos e-mails?"}
+                
+                emails, err = gmail.search_emails(query, limit)
+                if err:
+                    return self.feedback_loop(action_type, err)
+                if not emails:
+                    return {"action": "chat", "response": f"Nenhum e-mail encontrado correspondente a '{query}'."}
+                return {
+                    "action": "chat",
+                    "response": f"🔍 **Resultado da pesquisa por '{query}':**\n\n" + "\n---\n".join(emails)[:4000]
+                }
+                
             elif action_type == "contacts":
                 query = validated_action.get("query", "")
                 results, err = contacts.search_contacts(query)

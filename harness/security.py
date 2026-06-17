@@ -13,7 +13,7 @@ class JarvisSecurity:
         self.banned_words = ["hackear", "crackear", "destruir sistema", "roubar dados"]
 
         # Ações consideradas críticas que exigem confirmação explícita
-        self.critical_actions = ["calendar_delete", "contacts_delete"]
+        self.critical_actions = ["calendar_delete", "contacts_delete", "delete"]
 
     def check_rate_limit(self, chat_id: int) -> tuple[bool, int]:
         """

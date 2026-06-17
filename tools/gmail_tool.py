@@ -147,6 +147,7 @@ def get_emails(limit: int = 5) -> tuple[list[str] | None, str | None]:
             cat_str = ", ".join(unique_categories)
             
             emails.append(
+                f"ID: {m['id']}\n"
                 f"De: {sender}\n"
                 f"Assunto: {subject}\n"
                 f"Data: {date}\n"
@@ -158,4 +159,117 @@ def get_emails(limit: int = 5) -> tuple[list[str] | None, str | None]:
         return emails, None
     except Exception as e:
         logger.error(f"Erro ao listar e-mails via Gmail API: {e}")
+        return None, str(e)
+
+
+def trash_email(message_id: str) -> tuple[bool, str | None]:
+    """
+    Envia o e-mail correspondente ao message_id informado para a lixeira (trash) de forma segura.
+    Retorna (sucesso_bool, error_message).
+    """
+    service = get_gmail_service()
+    if not service:
+        return False, "Gmail não autenticado. Favor autenticar."
+
+    try:
+        logger.info(f"Movendo e-mail {message_id} para a lixeira...")
+        service.users().messages().trash(userId="me", id=message_id).execute()
+        logger.info(f"E-mail {message_id} movido para a lixeira com sucesso.")
+        return True, None
+    except Exception as e:
+        logger.error(f"Erro ao mover e-mail para a lixeira via Gmail API: {e}")
+        return False, str(e)
+
+
+def search_emails(query: str, limit: int = 5) -> tuple[list[str] | None, str | None]:
+    """
+    Pesquisa e-mails na caixa de entrada do usuário usando o parâmetro de busca do Gmail 'q'.
+    Retorna (lista_de_emails_formatados, error_message).
+    """
+    service = get_gmail_service()
+    if not service:
+        return None, "Gmail não autenticado. Favor autenticar."
+
+    try:
+        logger.info(f"Pesquisando e-mails com a query '{query}' (limite {limit})...")
+        results = service.users().messages().list(userId="me", q=query, maxResults=limit).execute()
+        messages = results.get('messages', [])
+        
+        if not messages:
+            logger.info(f"Nenhum e-mail correspondente a '{query}' encontrado.")
+            return [], None
+
+        emails = []
+        for m in messages:
+            msg = service.users().messages().get(
+                userId="me", 
+                id=m['id'], 
+                format='metadata', 
+                metadataHeaders=['From', 'Subject', 'Date']
+            ).execute()
+            
+            headers = {h['name']: h['value'] for h in msg.get('payload', {}).get('headers', [])}
+            subject = headers.get('Subject', '?')
+            sender = headers.get('From', '?')
+            date = headers.get('Date', '?')
+            
+            # Recuperar marcadores técnicos e snippet da mensagem
+            label_ids = msg.get('labelIds', [])
+            snippet = msg.get('snippet', '')
+            
+            # Identificar categorias amigáveis
+            categories = []
+            
+            # Importante
+            if 'IMPORTANT' in label_ids:
+                categories.append("Importantes")
+            
+            # Categorias do Gmail
+            if 'CATEGORY_SOCIAL' in label_ids:
+                categories.append("Social")
+            elif 'CATEGORY_FORUMS' in label_ids:
+                categories.append("Fóruns")
+            elif 'CATEGORY_PROMOTIONS' in label_ids:
+                categories.append("Promoções")
+            elif 'CATEGORY_UPDATES' in label_ids:
+                categories.append("Atualizações")
+            elif 'CATEGORY_PERSONAL' in label_ids:
+                categories.append("Pessoal")
+                
+            # Heurística de Compras (transações)
+            content_lower = f"{subject} {snippet}".lower()
+            palavras_compra = [
+                "compra", "pedido", "pagamento", "confirmado", "nf-e", "nfe", "nota fiscal", 
+                "faturamento", "cartão", "boleto", "invoice", "receipt", "payment", 
+                "order", "delivery", "rastreamento", "transação", "mercado livre", "amazon", 
+                "shopee", "shein", "magazine luiza", "magalu"
+            ]
+            if any(p in content_lower for p in palavras_compra):
+                categories.append("Compras")
+                
+            # Caso não tenha categorias identificadas
+            if not categories:
+                categories.append("Outros")
+                
+            # Evitar duplicados
+            unique_categories = []
+            for c in categories:
+                if c not in unique_categories:
+                    unique_categories.append(c)
+                    
+            cat_str = ", ".join(unique_categories)
+            
+            emails.append(
+                f"ID: {m['id']}\n"
+                f"De: {sender}\n"
+                f"Assunto: {subject}\n"
+                f"Data: {date}\n"
+                f"Classificação: {cat_str}\n"
+                f"Resumo: {snippet}"
+            )
+            
+        logger.info(f"Pesquisa concluída. {len(emails)} e-mails retornados para a busca '{query}'.")
+        return emails, None
+    except Exception as e:
+        logger.error(f"Erro ao pesquisar e-mails via Gmail API: {e}")
         return None, str(e)

@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import httpx
+from config import config
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -62,11 +63,7 @@ def get_gmail_service():
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
         
-        creds = Credentials.from_authorized_user_file(str(GOOGLE_TOKEN), [
-            'https://www.googleapis.com/auth/gmail.send',
-            'https://www.googleapis.com/auth/gmail.modify',
-            'https://www.googleapis.com/auth/gmail.compose'
-        ])
+        creds = Credentials.from_authorized_user_file(str(GOOGLE_TOKEN), config.google.scopes)
         
         gmail_service = build('gmail', 'v1', credentials=creds)
         logger.info("Gmail conectado!")
@@ -204,7 +201,7 @@ async def gmail_auth_url():
     
     flow = Flow.from_client_secrets_file(
         str(GOOGLE_CREDS),
-        scopes=['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/gmail.compose'],
+        scopes=config.google.scopes,
         redirect_uri="http://localhost:8000/api/gmail/callback"
     )
     
@@ -237,7 +234,7 @@ async def gmail_callback(code: str = None, state: str = None):
         
         flow = Flow.from_client_config(
             {"web": flow_data},
-            scopes=['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/gmail.compose'],
+            scopes=config.google.scopes,
             redirect_uri="http://localhost:8000/api/gmail/callback"
         )
         
