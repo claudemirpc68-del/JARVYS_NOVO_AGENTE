@@ -28,7 +28,7 @@ class JarvisOrchestrator:
         self.gemini_api_key = config.api.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
         
         # Caminho absoluto para o system prompt
-        self.prompt_path = Path(__file__).parent.parent / "llm_persona" / "system_prompt.txt"
+        self.prompt_path = Path(__file__).parent.parent / "llm_persona" / "system_prompt.md"
         
         # Carregar o prompt base
         if self.prompt_path.exists():
