@@ -278,6 +278,55 @@ class JarvisOrchestrator:
                 logger.error(f"Erro na API do Gemini: Status {resp.status_code} - {resp.text}")
                 raise httpx.HTTPStatusError(f"API do Gemini retornou {resp.status_code}", request=None, response=resp)
 
+    async def _classify_emails_list(self, chat_id: int, emails: list[dict]) -> str:
+        """
+        Formata uma lista de e-mails estruturados e a envia para a IA
+        para classificação inteligente em categorias e prioridades.
+        """
+        logger.info(f"Harness Email Classifier: Classificando {len(emails)} e-mails com IA...")
+        
+        # Formatar a lista de e-mails de entrada
+        formatted_list = []
+        for idx, e in enumerate(emails):
+            formatted_list.append(
+                f"E-mail {idx+1}:\n"
+                f"- De: {e.get('from', '?')}\n"
+                f"- Assunto: {e.get('subject', '?')}\n"
+                f"- Data: {e.get('date', '?')}\n"
+                f"- Snippet: {e.get('snippet', '')}\n"
+            )
+        
+        emails_text = "\n".join(formatted_list)
+        
+        prompt = (
+            "Você é o Classificador Inteligente de E-mails do JARVIS 2.0.\n"
+            "Analise os seguintes e-mails recentes da caixa de entrada do usuário e categorize-os ordenadamente:\n\n"
+            f"{emails_text}\n\n"
+            "Classifique os e-mails acima estritamente nas seguintes categorias:\n"
+            "- 🔴 URGENTE & IMPORTANTE (Finanças, contas, trabalho direto, assuntos de alta prioridade)\n"
+            "- 🔵 NOTIFICAÇÕES & ATUALIZAÇÕES (Newsletters, alertas de plataformas, redes sociais)\n"
+            "- 🟢 PROMOÇÕES & MARKETING (Ofertas, cupons, propagandas, marketing)\n"
+            "- ⚫ SPAM & OUTROS (Lixo eletrônico óbvio ou e-mails de relevância nula)\n\n"
+            "INSTRUÇÕES DE FORMATAÇÃO DA RESPOSTA:\n"
+            "1. Escreva sua resposta em Português do Brasil diretamente em Markdown bem estruturado e visualmente bonito para exibição no Telegram.\n"
+            "2. Organize em seções correspondentes a cada categoria. Use emojis adequados para cada categoria.\n"
+            "3. Se alguma categoria não contiver nenhum e-mail, NÃO a liste na resposta final.\n"
+            "4. Para cada e-mail, inclua: o remetente (From), o assunto (Subject) e um resumo super curto de 1 frase explicando o que se trata com base no snippet.\n"
+            "5. Não invente ou presuma e-mails que não estão na lista fornecida.\n"
+            "6. Responda diretamente com o texto Markdown formatado. NÃO retorne JSON e não inclua tags JSON.\n"
+        )
+        
+        # Chamar a IA usando classify_intent com force_json=False para obter o Markdown cru
+        result = await self.classify_intent(
+            chat_id, 
+            prompt, 
+            save_to_history=False, 
+            ignore_history=True, 
+            force_json=False
+        )
+        
+        return str(result)
+
     def validate_action(self, chat_id: int, action: dict) -> tuple[bool, dict]:
         """
         Valida se a ação estruturada gerada pelo Groq atende às regras de segurança do Harness.
@@ -548,14 +597,17 @@ class JarvisOrchestrator:
                 
             elif action_type == "list":
                 limit = validated_action.get("limit", 5)
-                emails, err = gmail.get_emails(limit)
+                emails, err = gmail.get_emails(limit, raw=True)
                 if err:
                     return self.feedback_loop(action_type, err)
                 if not emails:
                     return {"action": "chat", "response": "Nenhum e-mail encontrado na sua caixa de entrada."}
+                
+                # Classificar e-mails via IA
+                classified_report = await self._classify_emails_list(chat_id, emails)
                 return {
                     "action": "chat",
-                    "response": "📧 **Seus últimos e-mails:**\n\n" + "\n---\n".join(emails)[:4000]
+                    "response": classified_report
                 }
                 
             elif action_type == "delete":

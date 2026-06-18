@@ -80,6 +80,11 @@ class JarvisMemory:
         if chat_id not in self.chat_memories:
             self.chat_memories[chat_id] = []
         
+        # Limitar tamanho da mensagem no histórico para evitar estouro de tokens/payload na API
+        max_chars = 2000
+        if content and len(content) > max_chars:
+            content = content[:max_chars] + "... [Conteúdo truncado para economizar tokens do contexto]"
+            
         self.chat_memories[chat_id].append({"role": role, "content": content})
         self.save_to_disk()
 

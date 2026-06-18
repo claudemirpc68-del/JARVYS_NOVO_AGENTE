@@ -67,11 +67,12 @@ def send_email(to: str, subject: str, body: str) -> tuple[str | None, str | None
         logger.error(f"Erro ao enviar e-mail via Gmail API: {e}")
         return None, str(e)
 
-def get_emails(limit: int = 5) -> tuple[list[str] | None, str | None]:
+def get_emails(limit: int = 5, raw: bool = False) -> tuple[list[any] | None, str | None]:
     """
     Busca os últimos e-mails da caixa de entrada do usuário e os classifica em
     categorias como Social, Atualizações, Compras, Fóruns, Promoções e Importantes.
-    Retorna (lista_de_emails_formatados, error_message).
+    Se raw for True, retorna uma lista de dicionários com os dados estruturados do e-mail.
+    Se raw for False, retorna uma lista de strings formatadas (retrocompatível).
     """
     service = get_gmail_service()
     if not service:
@@ -104,56 +105,66 @@ def get_emails(limit: int = 5) -> tuple[list[str] | None, str | None]:
             label_ids = msg.get('labelIds', [])
             snippet = msg.get('snippet', '')
             
-            # Identificar categorias amigáveis
-            categories = []
-            
-            # Importante
-            if 'IMPORTANT' in label_ids:
-                categories.append("Importantes")
-            
-            # Categorias do Gmail
-            if 'CATEGORY_SOCIAL' in label_ids:
-                categories.append("Social")
-            elif 'CATEGORY_FORUMS' in label_ids:
-                categories.append("Fóruns")
-            elif 'CATEGORY_PROMOTIONS' in label_ids:
-                categories.append("Promoções")
-            elif 'CATEGORY_UPDATES' in label_ids:
-                categories.append("Atualizações")
-            elif 'CATEGORY_PERSONAL' in label_ids:
-                categories.append("Pessoal")
+            if raw:
+                emails.append({
+                    "id": m['id'],
+                    "from": sender,
+                    "subject": subject,
+                    "date": date,
+                    "snippet": snippet,
+                    "labels": label_ids
+                })
+            else:
+                # Identificar categorias amigáveis
+                categories = []
                 
-            # Heurística de Compras (transações)
-            content_lower = f"{subject} {snippet}".lower()
-            palavras_compra = [
-                "compra", "pedido", "pagamento", "confirmado", "nf-e", "nfe", "nota fiscal", 
-                "faturamento", "cartão", "boleto", "invoice", "receipt", "payment", 
-                "order", "delivery", "rastreamento", "transação", "mercado livre", "amazon", 
-                "shopee", "shein", "magazine luiza", "magalu"
-            ]
-            if any(p in content_lower for p in palavras_compra):
-                categories.append("Compras")
+                # Importante
+                if 'IMPORTANT' in label_ids:
+                    categories.append("Importantes")
                 
-            # Caso não tenha categorias identificadas
-            if not categories:
-                categories.append("Outros")
-                
-            # Evitar duplicados (mantendo ordem de inserção)
-            unique_categories = []
-            for c in categories:
-                if c not in unique_categories:
-                    unique_categories.append(c)
+                # Categorias do Gmail
+                if 'CATEGORY_SOCIAL' in label_ids:
+                    categories.append("Social")
+                elif 'CATEGORY_FORUMS' in label_ids:
+                    categories.append("Fóruns")
+                elif 'CATEGORY_PROMOTIONS' in label_ids:
+                    categories.append("Promoções")
+                elif 'CATEGORY_UPDATES' in label_ids:
+                    categories.append("Atualizações")
+                elif 'CATEGORY_PERSONAL' in label_ids:
+                    categories.append("Pessoal")
                     
-            cat_str = ", ".join(unique_categories)
-            
-            emails.append(
-                f"ID: {m['id']}\n"
-                f"De: {sender}\n"
-                f"Assunto: {subject}\n"
-                f"Data: {date}\n"
-                f"Classificação: {cat_str}\n"
-                f"Resumo: {snippet}"
-            )
+                # Heurística de Compras (transações)
+                content_lower = f"{subject} {snippet}".lower()
+                palavras_compra = [
+                    "compra", "pedido", "pagamento", "confirmado", "nf-e", "nfe", "nota fiscal", 
+                    "faturamento", "cartão", "boleto", "invoice", "receipt", "payment", 
+                    "order", "delivery", "rastreamento", "transação", "mercado livre", "amazon", 
+                    "shopee", "shein", "magazine luiza", "magalu"
+                ]
+                if any(p in content_lower for p in palavras_compra):
+                    categories.append("Compras")
+                    
+                # Caso não tenha categorias identificadas
+                if not categories:
+                    categories.append("Outros")
+                    
+                # Evitar duplicados (mantendo ordem de inserção)
+                unique_categories = []
+                for c in categories:
+                    if c not in unique_categories:
+                        unique_categories.append(c)
+                        
+                cat_str = ", ".join(unique_categories)
+                
+                emails.append(
+                    f"ID: {m['id']}\n"
+                    f"De: {sender}\n"
+                    f"Assunto: {subject}\n"
+                    f"Data: {date}\n"
+                    f"Classificação: {cat_str}\n"
+                    f"Resumo: {snippet}"
+                )
             
         logger.info(f"Busca concluída. {len(emails)} e-mails carregados com classificação.")
         return emails, None
