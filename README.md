@@ -1,216 +1,100 @@
-# JARVIS 2.0 - Assistente de Email Inteligente
+# JARVIS 2.0 - Gerenciador de Planilha de Clientes (IA & Telegram)
 
-🤖 Uma implementação alternativa do JARVIS 2.0 sem n8n, construída com Python, FastAPI e Groq API.
+🤖 Uma implementação inteligente do **JARVIS 2.0** integrada ao Telegram, construída com Python e conectada diretamente à API do Google Sheets para o gerenciamento de registros de clientes da planilha `"Cadastro Clientes Tratado"`.
 
-## 🚀 Funcionalidades
-
-- **Gestão de Emails**: Envio, resposta, busca e organização de emails
-- **Interface Telegram**: Controle via chatbot do Telegram
-- **IA com Groq**: Processamento inteligente de comandos naturais
-- **Formatação Profissional**: Emails em HTML com assinatura padrão
-- **Automação Inteligente**: Seleção automática de ações baseada em contexto
-
-## 📁 Estrutura do Projeto
-
-```
-JARVIS_2.0/
-├── jarvis_server.py      # Servidor FastAPI principal
-├── telegram_bot.py      # Bot do Telegram
-├── setup.py            # Script de configuração inicial
-├── requirements.txt   # Dependências Python
-├── .env.example       # Modelo de variáveis de ambiente
-└── README.md          # Este arquivo
-```
-
-## 🔧 Configuração Inicial
-
-### 1. Pré-requisitos
-- Python 3.8+
-- Conta Google (para Gmail API)
-- Conta Groq (para API IA)
-- Bot Telegram
-
-### 2. Instalação das Dependências
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Configuração das Credenciais
-
-#### Google API
-1. Acesse [Google Cloud Console](https://console.cloud.google.com/)
-2. Crie um novo projeto
-3. Ative as APIs: **Gmail API**, **Google Drive API** (opcional)
-4. Crie credenciais OAuth 2.0:
-   - Tipo: "Web application"
-   - URIs de redirecionamento: `http://localhost:8000`
-5. Baixe o arquivo `credentials.json`
-
-#### Groq API
-1. Acesse [Groq Console](https://console.groq.com/)
-2. Crie sua conta e obtenha a API Key
-3. Adicione ao arquivo `.env`
-
-#### Telegram Bot
-1. Crie um bot no [@BotFather](https://t.me/BotFather)
-2. Copie o token
-3. Adicione ao arquivo `.env`
-
-### 4. Configuração do Ambiente
-```bash
-python setup.py
-```
-
-Este script irá:
-- Copiar `credentials.json` para o diretório do projeto
-- Criar arquivo `.env` a partir do exemplo
-- Configurar variáveis de ambiente
-
-### 5. Variáveis de Ambiente
-Crie/edite o arquivo `.env`:
-
-```env
-# API Keys
-GROQ_API_KEY=sua_chave_groq_aqui
-TELEGRAM_TOKEN=seu_token_telegram_aqui
-
-# Google API Credentials
-GOOGLE_CREDENTIALS_PATH=credentials.json
-GOOGLE_TOKEN_PATH=token.json
-
-# User Configuration
-USER_ID=seu_id_telegram_aqui
-
-# Server Configuration
-HOST=0.0.0.0
-PORT=8000
-```
-
-## 🚀 Execução
-
-### 1. Servidor Principal
-```bash
-python jarvis_server.py
-```
-
-Servidor estará disponível em: `http://localhost:8000`
-
-#### Endpoints Disponíveis
-- `POST /api/email-command` - Processar comandos de email
-- `POST /api/telegram-command` - Processar comandos do Telegram
-- `GET /api/status` - Status do sistema
-
-### 2. Bot do Telegram
-```bash
-python telegram_bot.py
-```
-
-### 3. Acessar a API
-- Swagger UI: `http://localhost:8000/docs`
-- Alternativo: `http://localhost:8000/redoc`
-
-## 💻 Comandos Disponíveis
-
-### Comandos do Telegram
-- `/start` - Mensagem de boas-vindas
-- `/help` - Ajuda detalhada
-- `/status` - Status do sistema
-
-### Comandos de Email (em linguagem natural)
-- **Enviar email**: "Envia um email para joao@exemplo.com assunto reunião corpo da mensagem"
-- **Buscar emails**: "Busca emails do João" ou "Busca os últimos 5 emails"
-- **Criar rascunho**: "Cria rascunho para maria@empresa.com assunto proposta corpo da mensagem"
-- **Responder email**: "Responde ao último email sobre a proposta"
-- **Marcar como não lido**: "Marca o último email como não lido"
-- **Adicionar etiqueta**: "Adiciona etiqueta importante ao email do João"
-
-## 🔄 Fluxo de Trabalho
-
-1. **Receber Comando**: Via Telegram ou API
-2. **Processar IA**: Groq interpreta a linguagem natural
-3. **Selecionar Ação**: IA escolhe a ferramenta apropriada
-4. **Executar**: Ação é realizada via Gmail API
-5. **Resposta**: Resultado é enviado de volta ao usuário
-
-## 🛠️ Desenvolvimento
-
-### Adicionar Novas Ações
-1. Adicionar método na classe `JarvisService`
-2. Atualizar o prompt do sistema em `AService._get_system_prompt`
-3. Adicionar endpoint correspondente se necessário
-
-### Estrutura de Pastas (Sugestão)
-```
-JARVIS_2.0/
-├── src/
-│   ├── __init__.py
-│   ├── core/
-│   │   ├── jarvis_service.py
-│   │   ├── ai_service.py
-│   │   └── email_service.py
-│   ├── api/
-│   │   ├── routes.py
-│   │   └── models.py
-│   └── utils/
-│       ├── config.py
-│       └── helpers.py
-├── tests/
-├── config/
-├── logs/
-└── data/
-```
-
-## 🐛 Troubleshooting
-
-### Erros Comuns
-
-**1. Erro de autenticação Gmail**
-```
-google.auth.exceptions.RefreshError: invalid_grant
-```
-Solução: Excluir `token.json` e executar novamente para obter novo token OAuth.
-
-**2. Erro de API Key Groq**
-```
-groq.core.RateLimitError: Rate limit exceeded
-```
-Solução: Verificar API Key e limites de uso da Groq.
-
-**3. Bot não responde**
-Solução: Verificar token Telegram e se o bot pode enviar mensagens.
-
-### Logs
-Os logs são gerados no console. Para salvar em arquivo:
-```bash
-python jarvis_server.py > jarvis.log 2>&1
-```
-
-## 📈 Melhorias Futuras
-
-- [ ] Interface web para gerenciamento
-- [ ] Suporte a outros provedores de email
-- [ ] Integração com calendário
-- [ ] Agendamento de emails
-- [ ] Análise de sentimentos de emails
-- [ ] Templates de emails
-- [ ] Sistema de autenticação de usuários
-- [ ] Logs detalhados e monitoramento
-
-## 🔒 Segurança
-
-- Nunca compartilhe suas credenciais
-- Use HTTPS em produção
-- Rotacione tokens regularmente
-- Restrinja escopos das APIs do Google
-- Valide inputs dos usuários
-
-## 📞 Suporte
-
-Para dúvidas ou sugestões:
-- Crie uma issue no repositório
-- Verifique os logs para erros
-- Teste com credenciais dummy primeiro
+O bot utiliza inteligência artificial multimodelo com suporte prioritário ao **Google Gemini 2.5 Flash** (e fallbacks para **Groq Llama 3** e **OpenRouter**), garantindo estabilidade, suporte a grandes contextos e respostas em tempo recorde.
 
 ---
 
-💡 **Dica**: Comece testando com o servidor primeiro antes de iniciar o bot Telegram para garantir que tudo está funcionando corretamente.
+## 🚀 Funcionalidades Principais
+
+* **📊 Resumo Estatístico em Tempo Real:** Gera métricas demográficas instantâneas da base de clientes (total de clientes, contagem de gêneros M/F, idade média do público e distribuição por faixas etárias).
+* **🔍 Busca Inteligente:** Localiza registros na tabela a partir de buscas parciais de nomes ou sobrenomes de clientes.
+* **➕ Cadastro e Higienização Automática de Dados:** Cadastra novos clientes aplicando regras de padronização corporativa:
+  - Inversão automática de nomes desordenados (ex: `"silva, carlos b."` ➔ `"Carlos B. Silva"`).
+  - Padronização rigorosa do gênero (`M` ou `F`).
+  - Formatação e validação de datas de nascimento no formato `DD/MM/AAAA`.
+  - Cálculo preciso de idade com base no dia e mês corrente.
+  - Classificação matemática da Faixa Etária (`Menor de Idade`, `Jovem Adulto`, `Adulto`, `Idoso`).
+* **🗣️ Interação por Voz:** Suporta o recebimento e envio de notas de voz nativas no Telegram (usa Groq Whisper para transcrição e Edge TTS para falar de volta com você).
+
+---
+
+## 📁 Estrutura do Projeto
+
+```text
+JARVIS_2.0/
+├── harness/
+│   ├── orchestrator.py        # Orquestrador ReAct e classificação de intenções da IA
+│   ├── memory.py              # Gerenciador de histórico e contexto persistente
+│   └── security.py            # Sanitização e validação de segurança de entrada
+├── tools/
+│   ├── customer_sheets_tool.py# Lógica e integração com o Google Sheets API (gspread)
+│   └── audio_tool.py          # Transcrição (Whisper) e síntese de voz (TTS)
+├── llm_persona/
+│   └── system_prompt.md       # Persona e regras JSON do agente focado em planilhas
+├── telegram_bot.py            # Interface principal do bot do Telegram
+├── validar_sheets_bot.py      # Script autônomo de testes de integração e conexão
+├── inserir_ficticios.py       # Script de automação para inserção rápida de 10 clientes em lote
+├── credentials.json           # Chave de acesso da conta de serviço Google (Ignorada no Git)
+├── .env                       # Configuração de tokens e variáveis (Ignorada no Git)
+└── requirements.txt           # Dependências Python do projeto
+```
+
+---
+
+## 🔧 Configuração e Instalação
+
+### 1. Pré-requisitos
+* Python 3.10 ou superior.
+* Conta no Telegram (Token obtido via [@BotFather](https://t.me/BotFather)).
+* Google Cloud Console (Arquivo `credentials.json` habilitado para Google Sheets API e compartilhado como editor na sua planilha online).
+* API Key do Google AI Studio (Gemini) ou Groq.
+
+### 2. Configurando o Ambiente
+Navegue até a pasta do projeto e instale as dependências:
+```bash
+# Ativar o ambiente virtual (.venv)
+.venv\Scripts\activate
+
+# Instalar as bibliotecas necessárias
+pip install -r requirements.txt
+```
+
+### 3. Variáveis de Ambiente (`.env`)
+Garanta que as seguintes variáveis estejam configuradas no seu arquivo `.env`:
+```env
+TELEGRAM_TOKEN=seu_token_telegram_aqui
+GEMINI_API_KEY=sua_chave_gemini_aqui
+GROQ_API_KEY=sua_chave_groq_aqui
+```
+
+---
+
+## 🚀 Como Executar
+
+### 1. Executando o Bot do Telegram
+Para iniciar o bot e deixá-lo escutando comandos (texto e voz) no Telegram:
+```bash
+.venv\Scripts\python telegram_bot.py
+```
+
+### 2. Validar Conexão Local e Operações
+Para rodar os testes de diagnóstico isolados de leitura, busca e gravação no Sheets:
+```bash
+.venv\Scripts\python validar_sheets_bot.py
+```
+
+### 3. Inserir Clientes Fictícios de Demonstração
+Para rodar a automação em lote que insere 10 novos clientes fictícios higienizados na nuvem de uma única vez:
+```bash
+.venv\Scripts\python inserir_ficticios.py
+```
+
+---
+
+## 💬 Exemplos de Uso no Telegram
+
+* **Pedir estatísticas:** *"JARVIS, me dê um resumo estatístico da planilha."*
+* **Pesquisar alguém:** *"Busque por 'Juana' na tabela."*
+* **Cadastrar cliente:** *"Adicionar cliente Carlos Santos, masculino, nascido em 10/12/1985."*
